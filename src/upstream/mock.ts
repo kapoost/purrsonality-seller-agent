@@ -1,0 +1,226 @@
+import { PRODUCTS, PUBLISHER, type PurrProductConfig } from '../config/purrsonality.ts';
+
+export interface MockOrder {
+  order_id: string;
+  network_code: string;
+  advertiser_id: string;
+  product_ids: string[];
+  budget: number;
+  currency: string;
+  pacing: 'even' | 'asap' | 'front_loaded';
+  status: 'pending_creatives' | 'pending_start' | 'confirmed' | 'delivering' | 'paused' | 'completed' | 'canceled' | 'rejected';
+  flight_start?: string;
+  flight_end?: string;
+  created_at: string;
+  client_request_id?: string;
+  package_overlays?: Record<string, PackageOverlay>;
+}
+
+export interface PackageOverlay {
+  property_list?: { agent_url: string; list_id: string };
+  collection_list?: { agent_url: string; list_id: string };
+}
+
+export interface MockDeliveryRow {
+  order_id: string;
+  impressions: number;
+  clicks: number;
+  spend: number;
+  currency: string;
+  pacing_pct: number;
+}
+
+const orders = new Map<string, MockOrder>();
+const requestKey = new Map<string, string>();
+const deliverySim = new Map<
+  string,
+  { impressions: number; clicks: number; spend: number; currency: string }
+>();
+const seededProducts = new Map<string, PurrProductConfig>();
+const seededCreatives = new Map<string, Record<string, unknown>>();
+const seededFormats = new Map<string, Record<string, unknown>>();
+
+function generateOrderId(): string {
+  return `mb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export const mockUpstream = {
+  lookupPublisher(domain: string) {
+    return domain === PUBLISHER.adcp_publisher ? PUBLISHER : null;
+  },
+
+  listProducts(): readonly PurrProductConfig[] {
+    return [...PRODUCTS, ...seededProducts.values()];
+  },
+
+  getProduct(id: string): PurrProductConfig | undefined {
+    return PRODUCTS.find((p) => p.product_id === id) ?? seededProducts.get(id);
+  },
+
+  seedProduct(id: string, overrides?: Partial<PurrProductConfig>): PurrProductConfig {
+    const existing = PRODUCTS[0]!;
+    const product: PurrProductConfig = {
+      product_id: id,
+      name: overrides?.name ?? `Seeded ${id}`,
+      description: overrides?.description ?? `Test product seeded by compliance runner: ${id}`,
+      network_code: PUBLISHER.network_code,
+      channel: (overrides?.channel as 'display') ?? 'display',
+      format_ids: (overrides?.format_ids as readonly string[]) ?? existing.format_ids,
+      ad_unit_ids: (overrides?.ad_unit_ids as readonly string[]) ?? existing.ad_unit_ids,
+      min_cpm: overrides?.min_cpm ?? existing.min_cpm,
+      currency: overrides?.currency ?? existing.currency,
+      min_spend: overrides?.min_spend ?? existing.min_spend,
+      estimated_impressions_per_month: overrides?.estimated_impressions_per_month ?? existing.estimated_impressions_per_month,
+    };
+    seededProducts.set(id, product);
+    return product;
+  },
+
+  seedCreative(id: string, fixture: Record<string, unknown>, accountId?: string): void {
+    seededCreatives.set(id, { ...fixture, creative_id: id, _account_id: accountId });
+  },
+
+  listCreatives(accountId?: string): Array<Record<string, unknown>> {
+    const all = [...seededCreatives.values()];
+    if (!accountId) return all;
+    return all.filter((c) => {
+      const owner = c['_account_id'];
+      return owner === undefined || owner === accountId;
+    });
+  },
+
+  seedCreativeFormat(id: string, fixture: Record<string, unknown>): void {
+    seededFormats.set(id, { ...fixture, format_id: id });
+  },
+
+  listSeededFormats(): Array<Record<string, unknown>> {
+    return [...seededFormats.values()];
+  },
+
+  createOrder(args: {
+    network_code: string;
+    advertiser_id: string;
+    product_ids: string[];
+    budget: number;
+    currency: string;
+    pacing?: 'even' | 'asap' | 'front_loaded';
+    flight_start?: string;
+    flight_end?: string;
+    client_request_id?: string;
+  }): MockOrder {
+    if (args.client_request_id) {
+      const existing = requestKey.get(args.client_request_id);
+      if (existing) {
+        const order = orders.get(existing);
+        if (order) return order;
+      }
+    }
+
+    const order: MockOrder = {
+      order_id: generateOrderId(),
+      network_code: args.network_code,
+      advertiser_id: args.advertiser_id,
+      product_ids: args.product_ids,
+      budget: args.budget,
+      currency: args.currency,
+      pacing: args.pacing ?? 'even',
+      status: 'confirmed',
+      ...(args.flight_start !== undefined && { flight_start: args.flight_start }),
+      ...(args.flight_end !== undefined && { flight_end: args.flight_end }),
+      created_at: new Date().toISOString(),
+      ...(args.client_request_id !== undefined && { client_request_id: args.client_request_id }),
+    };
+
+    orders.set(order.order_id, order);
+    if (args.client_request_id) requestKey.set(args.client_request_id, order.order_id);
+    return order;
+  },
+
+  getOrder(id: string): MockOrder | undefined {
+    return orders.get(id);
+  },
+
+  listOrders(networkCode: string): MockOrder[] {
+    return [...orders.values()].filter((o) => o.network_code === networkCode);
+  },
+
+  updateOrder(id: string, patch: Partial<Pick<MockOrder, 'status' | 'budget' | 'pacing'>>): MockOrder | undefined {
+    const o = orders.get(id);
+    if (!o) return undefined;
+    Object.assign(o, patch);
+    return o;
+  },
+
+  setPackageOverlay(orderId: string, productId: string, overlay: PackageOverlay): void {
+    const o = orders.get(orderId);
+    if (!o) return;
+    o.package_overlays = o.package_overlays ?? {};
+    o.package_overlays[productId] = { ...(o.package_overlays[productId] ?? {}), ...overlay };
+  },
+
+  getDelivery(orderId: string): MockDeliveryRow | null {
+    const o = orders.get(orderId);
+    if (!o) return null;
+    const sim = deliverySim.get(orderId);
+    return {
+      order_id: o.order_id,
+      impressions: sim?.impressions ?? 0,
+      clicks: sim?.clicks ?? 0,
+      spend: sim?.spend ?? 0,
+      currency: sim?.currency ?? o.currency,
+      pacing_pct: 0,
+    };
+  },
+
+  seedOrder(args: {
+    media_buy_id: string;
+    network_code: string;
+    advertiser_id: string;
+    product_ids?: string[];
+    budget?: number;
+    currency?: string;
+    status?: MockOrder['status'];
+  }): MockOrder {
+    const existing = orders.get(args.media_buy_id);
+    const order: MockOrder = existing ?? {
+      order_id: args.media_buy_id,
+      network_code: args.network_code,
+      advertiser_id: args.advertiser_id,
+      product_ids: args.product_ids ?? [],
+      budget: args.budget ?? 0,
+      currency: args.currency ?? 'USD',
+      pacing: 'even',
+      status: args.status ?? 'confirmed',
+      created_at: new Date().toISOString(),
+    };
+    if (args.status) order.status = args.status;
+    orders.set(args.media_buy_id, order);
+    return order;
+  },
+
+  forceStatus(mediaBuyId: string, status: MockOrder['status']): MockOrder['status'] | undefined {
+    const order = orders.get(mediaBuyId);
+    if (!order) return undefined;
+    const previous = order.status;
+    order.status = status;
+    return previous;
+  },
+
+  addDelivery(
+    mediaBuyId: string,
+    delta: { impressions?: number; clicks?: number; spend?: number; currency?: string },
+  ): void {
+    const prev = deliverySim.get(mediaBuyId) ?? {
+      impressions: 0,
+      clicks: 0,
+      spend: 0,
+      currency: 'USD',
+    };
+    deliverySim.set(mediaBuyId, {
+      impressions: prev.impressions + (delta.impressions ?? 0),
+      clicks: prev.clicks + (delta.clicks ?? 0),
+      spend: prev.spend + (delta.spend ?? 0),
+      currency: delta.currency ?? prev.currency,
+    });
+  },
+};

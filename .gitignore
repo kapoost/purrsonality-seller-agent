@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.env.local
+bun.lockb
+spike/runtime-test.ts
+*.log
+.DS_Store
