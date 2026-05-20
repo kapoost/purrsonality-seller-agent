@@ -40,6 +40,14 @@ const seededProducts = new Map<string, PurrProductConfig>();
 const seededCreatives = new Map<string, Record<string, unknown>>();
 const seededFormats = new Map<string, Record<string, unknown>>();
 
+export interface CreateMediaBuyDirective {
+  arm: 'submitted' | 'input-required';
+  task_id?: string;
+  message?: string;
+}
+
+const createMediaBuyDirectives = new Map<string, CreateMediaBuyDirective>();
+
 function generateOrderId(): string {
   return `mb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -95,6 +103,16 @@ export const mockUpstream = {
 
   listSeededFormats(): Array<Record<string, unknown>> {
     return [...seededFormats.values()];
+  },
+
+  setCreateMediaBuyDirective(accountId: string, directive: CreateMediaBuyDirective): void {
+    createMediaBuyDirectives.set(accountId, directive);
+  },
+
+  consumeCreateMediaBuyDirective(accountId: string): CreateMediaBuyDirective | undefined {
+    const d = createMediaBuyDirectives.get(accountId);
+    if (d) createMediaBuyDirectives.delete(accountId);
+    return d;
   },
 
   createOrder(args: {
