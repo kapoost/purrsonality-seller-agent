@@ -5,7 +5,7 @@ import { signals } from './handlers/signals.ts';
 
 export const platform = definePlatform<null, PurrAccountMeta>({
   capabilities: {
-    specialisms: ['sales-non-guaranteed', 'signal-marketplace'] as const,
+    specialisms: ['sales-non-guaranteed', 'signal-owned'] as const,
     channels: ['display'] as const,
     pricingModels: ['cpm'] as const,
     config: null,

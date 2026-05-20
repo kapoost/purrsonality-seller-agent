@@ -89,7 +89,7 @@ export const mockUpstream = {
   },
 
   listCreatives(accountId?: string): Array<Record<string, unknown>> {
-    const all = [...seededCreatives.values()];
+    const all = [...seededCreatives.values()].reverse();
     if (!accountId) return all;
     return all.filter((c) => {
       const owner = c['_account_id'];
