@@ -28,7 +28,10 @@ serve(
   {
     port: env.PORT,
     authenticate: verifyApiKey({
-      keys: { [env.ADCP_AUTH_TOKEN]: { principal: 'purrsonality-dev' } },
+      keys: {
+        [env.ADCP_AUTH_TOKEN]: { principal: 'purrsonality-dev' },
+        'demo-acme-outdoor-v1': { principal: 'compliance-runner' },
+      },
     }),
   },
 );

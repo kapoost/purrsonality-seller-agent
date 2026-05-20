@@ -181,9 +181,11 @@ export const sales: SalesPlatform<PurrAccountMeta> = defineSalesPlatform<PurrAcc
     return { products };
   },
 
-  async createMediaBuy(req: CreateMediaBuyRequest, ctx): Promise<CreateMediaBuySuccess> {
+  async createMediaBuy(req: CreateMediaBuyRequest, ctx) {
     const account = ctx.account;
     if (!account) throw new AdcpError('ACCOUNT_NOT_FOUND', { message: 'no account in context' });
+
+    const directive = mockUpstream.consumeCreateMediaBuyDirective(account.id);
 
     const packages = req.packages ?? [];
     if (packages.length === 0 && !req.proposal_id) {
@@ -287,7 +289,7 @@ export const sales: SalesPlatform<PurrAccountMeta> = defineSalesPlatform<PurrAcc
 
     const status: MediaBuyStatus = hasAnyCreatives ? 'active' : 'pending_creatives';
 
-    return {
+    const successResponse: CreateMediaBuySuccess = {
       media_buy_id: order.order_id,
       status,
       confirmed_at: order.created_at,
@@ -302,6 +304,12 @@ export const sales: SalesPlatform<PurrAccountMeta> = defineSalesPlatform<PurrAcc
         ),
       ),
     } as unknown as CreateMediaBuySuccess;
+
+    if (directive?.arm === 'submitted' && directive.task_id) {
+      return ctx.handoffToTask(async () => successResponse, { task_id: directive.task_id });
+    }
+
+    return successResponse;
   },
 
   async updateMediaBuy(

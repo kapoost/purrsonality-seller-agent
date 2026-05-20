@@ -54,6 +54,21 @@ export const complyTest: ComplyControllerConfig = {
   },
 
   force: {
+    create_media_buy_arm: async (params) => {
+      const accountId = `sandbox_${PUBLISHER.network_code}`;
+      mockUpstream.setCreateMediaBuyDirective(accountId, {
+        arm: params.arm,
+        ...(params.task_id !== undefined && { task_id: params.task_id }),
+        ...(params.message !== undefined && { message: params.message }),
+      });
+      return {
+        success: true,
+        forced: {
+          arm: params.arm,
+          ...(params.task_id !== undefined && { task_id: params.task_id }),
+        },
+      };
+    },
     media_buy_status: async (params) => {
       const previous = mockUpstream.forceStatus(params.media_buy_id, mockStatus(params.status));
       if (previous === undefined) {
