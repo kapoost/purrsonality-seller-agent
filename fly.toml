@@ -1,0 +1,33 @@
+# Fly.io deployment config. Bun-native AdCP seller agent.
+# Region fra (Frankfurt) — co-located z Neon Postgres (eu-central-1)
+# dla sub-ms DB round-trip. Warsaw (waw) deprecated 2026-05.
+
+app = "purrsonality-seller"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PUBLIC_BASE_URL = "https://purrsonality-seller.fly.dev"
+  # ADCP_SANDBOX celowo NIE 1 — production reject live caller comply controller
+  # (per Addie #1, "compliance_testing block niewidoczny dla live principal").
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0  # scale-to-zero. Production: bump do 1 dla cold-start.
+  processes = ["app"]
+
+# Brak [[http_service.checks]] — Fly defaultuje TCP-readiness na internal_port,
+# co pasuje do naszego MCP serve() (no /healthz endpoint, POST /mcp wymaga JSON-RPC
+# body z initialize żeby zwrócić 200 — bezsensowne jako health probe).
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
