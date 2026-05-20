@@ -12,6 +12,8 @@
   "dependencies": {
     "@adcp/sdk": "^7.7.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/pg": "^8.20.0",
+    "pg": "^8.21.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
