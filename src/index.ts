@@ -1,10 +1,12 @@
 import { createAdcpServerFromPlatform, serve, verifyApiKey } from '@adcp/sdk/server';
 import { complyTest } from './comply.ts';
+import { runMigrations } from './db/migrations.ts';
 import { loadEnv } from './env.ts';
 import { platform } from './platform.ts';
 import { idempotencyStore, mediaBuyStore, stateStore, taskRegistry } from './stores/index.ts';
 
 const env = loadEnv();
+await runMigrations();
 
 serve(
   ({ taskStore }) =>
