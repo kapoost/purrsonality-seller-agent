@@ -36,6 +36,7 @@ serve(
           [env.ADCP_TEST_TOKEN]: { principal: 'purrsonality-test' },
         }),
         'demo-acme-outdoor-v1': { principal: 'compliance-runner' },
+        'demo-acme-outdoor-live-v1': { principal: 'compliance-runner-live' },
       },
     }),
   },

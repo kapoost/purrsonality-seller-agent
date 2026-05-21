@@ -29,7 +29,6 @@ jobs:
       ADCP_AUTH_TOKEN: ci_prod_token_unused_in_storyboard_run
       ADCP_TEST_TOKEN: ci_smoke_test_token_for_storyboard_run
       PUBLIC_BASE_URL: http://127.0.0.1:3001
-      ADCP_SANDBOX: "1"
       NODE_ENV: development
     steps:
       - uses: actions/checkout@v4

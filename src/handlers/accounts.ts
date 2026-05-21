@@ -7,6 +7,16 @@ export interface PurrAccountMeta {
 
 const SANDBOX_ID_PREFIX = 'sandbox_';
 
+// Principals authorized for sandbox routing. The SDK sandbox-authority gate
+// (comply_test_controller) admits dispatch only when the resolved account
+// carries `mode: 'sandbox'`. Wire-level `account.sandbox: true` is ignored
+// per spec — resolver-wins, so a live principal can't forge sandbox routing
+// by sending the claim on the wire.
+const SANDBOX_PRINCIPALS: ReadonlySet<string> = new Set([
+  'purrsonality-test',
+  'compliance-runner',
+]);
+
 function buildAccount(overrides?: Partial<Account<PurrAccountMeta>>): Account<PurrAccountMeta> {
   return {
     id: PUBLISHER.network_code,
@@ -19,10 +29,13 @@ function buildAccount(overrides?: Partial<Account<PurrAccountMeta>>): Account<Pu
 
 export const accountStore: AccountStore<PurrAccountMeta> = {
   resolution: 'explicit',
-  resolve: async (ref) => {
-    if (ref && 'sandbox' in ref && ref.sandbox === true) {
-      const brand = (ref as { brand?: { domain?: string } }).brand;
-      const operator = (ref as { operator?: string }).operator;
+  resolve: async (ref, ctx) => {
+    const principal = ctx?.authInfo?.clientId;
+    const isSandbox = principal !== undefined && SANDBOX_PRINCIPALS.has(principal);
+
+    if (isSandbox) {
+      const brand = (ref as { brand?: { domain?: string } } | undefined)?.brand;
+      const operator = (ref as { operator?: string } | undefined)?.operator;
       return buildAccount({
         id: `${SANDBOX_ID_PREFIX}${PUBLISHER.network_code}`,
         name: `Sandbox: ${PUBLISHER.display_name}`,
@@ -32,6 +45,6 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
       } as Partial<Account<PurrAccountMeta>>);
     }
 
-    return buildAccount();
+    return buildAccount({ mode: 'live' } as Partial<Account<PurrAccountMeta>>);
   },
 };
