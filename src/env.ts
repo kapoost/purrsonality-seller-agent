@@ -3,6 +3,7 @@ import { z } from 'zod';
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3001),
   ADCP_AUTH_TOKEN: z.string().min(8),
+  ADCP_TEST_TOKEN: z.string().min(8).optional(),
   ADCP_PRIVATE_JWK: z.string().optional(),
   ADCP_KEY_ID: z.string().optional(),
   PUBLIC_BASE_URL: z.string().url().default('http://127.0.0.1:3001'),

@@ -32,6 +32,9 @@ serve(
     authenticate: verifyApiKey({
       keys: {
         [env.ADCP_AUTH_TOKEN]: { principal: 'purrsonality-dev' },
+        ...(env.ADCP_TEST_TOKEN && {
+          [env.ADCP_TEST_TOKEN]: { principal: 'purrsonality-test' },
+        }),
         'demo-acme-outdoor-v1': { principal: 'compliance-runner' },
       },
     }),

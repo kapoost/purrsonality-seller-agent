@@ -26,7 +26,8 @@ jobs:
     needs: typecheck
     env:
       PORT: 3001
-      ADCP_AUTH_TOKEN: ci_smoke_test_token_for_storyboard_run
+      ADCP_AUTH_TOKEN: ci_prod_token_unused_in_storyboard_run
+      ADCP_TEST_TOKEN: ci_smoke_test_token_for_storyboard_run
       PUBLIC_BASE_URL: http://127.0.0.1:3001
       ADCP_SANDBOX: "1"
       NODE_ENV: development
@@ -45,7 +46,7 @@ jobs:
           sleep 3
           curl -sf -X POST http://127.0.0.1:3001/mcp \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $ADCP_AUTH_TOKEN" \
+            -H "Authorization: Bearer $ADCP_TEST_TOKEN" \
             -H "Accept: application/json, text/event-stream" \
             -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci-smoke","version":"1.0"}}}' > /dev/null
           echo "Seller agent up"
@@ -53,7 +54,7 @@ jobs:
       - name: Run AdCP storyboard suite
         run: |
           bunx adcp storyboard run http://127.0.0.1:3001/mcp \
-            --auth $ADCP_AUTH_TOKEN \
+            --auth $ADCP_TEST_TOKEN \
             --allow-http \
             --timeout 120 \
             --summary-output /tmp/summary.json 2>&1 | tee /tmp/storyboard.out
