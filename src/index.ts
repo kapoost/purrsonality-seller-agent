@@ -43,4 +43,4 @@ serve(
 );
 
 console.log(`Purrsonality seller agent listening on ${env.PUBLIC_BASE_URL}/mcp`);
-console.log(`Specialisms: sales-non-guaranteed, signal-marketplace`);
+console.log(`Specialisms: sales-non-guaranteed`);

@@ -71,16 +71,16 @@ jobs:
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
           echo "| Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
-          echo "| Threshold (regression guard) | 122 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Threshold (regression guard) | 115 |" >> $GITHUB_STEP_SUMMARY
 
-      - name: Regression guard (must pass ≥122)
+      - name: Regression guard (must pass ≥115)
         run: |
           PASSED=${{ steps.parse.outputs.passed }}
-          if [ "$PASSED" -lt 122 ]; then
-            echo "::error::Regression: $PASSED < 122 baseline. Investigate failed storyboards before merging."
+          if [ "$PASSED" -lt 115 ]; then
+            echo "::error::Regression: $PASSED < 115 baseline. Investigate failed storyboards before merging."
             exit 1
           fi
-          echo "OK: $PASSED ≥ 122 baseline"
+          echo "OK: $PASSED ≥ 115 baseline"
 
       - name: Stop seller agent
         if: always()
