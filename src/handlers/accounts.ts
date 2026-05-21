@@ -27,6 +27,18 @@ function buildAccount(overrides?: Partial<Account<PurrAccountMeta>>): Account<Pu
   };
 }
 
+function accountForPrincipal(principal: string | undefined): Account<PurrAccountMeta> {
+  const isSandbox = principal !== undefined && SANDBOX_PRINCIPALS.has(principal);
+  if (isSandbox) {
+    return buildAccount({
+      id: `${SANDBOX_ID_PREFIX}${PUBLISHER.network_code}`,
+      name: `Sandbox: ${PUBLISHER.display_name}`,
+      mode: 'sandbox',
+    } as Partial<Account<PurrAccountMeta>>);
+  }
+  return buildAccount({ mode: 'live' } as Partial<Account<PurrAccountMeta>>);
+}
+
 export const accountStore: AccountStore<PurrAccountMeta> = {
   resolution: 'explicit',
   resolve: async (ref, ctx) => {
@@ -46,5 +58,9 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
     }
 
     return buildAccount({ mode: 'live' } as Partial<Account<PurrAccountMeta>>);
+  },
+  list: async (_filter, ctx) => {
+    const account = accountForPrincipal(ctx?.authInfo?.clientId);
+    return { items: [account] };
   },
 };
