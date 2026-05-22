@@ -59,6 +59,9 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
 
     return buildAccount({ mode: 'live' } as Partial<Account<PurrAccountMeta>>);
   },
+  // Single-publisher first-party model: each principal resolves to one account
+  // (sandbox/live differ only by mode). pagination_integrity_list_accounts/*
+  // fails on this; see adcontextprotocol/adcp#4914 — runner gap, not impl bug.
   list: async (_filter, ctx) => {
     const account = accountForPrincipal(ctx?.authInfo?.clientId);
     return { items: [account] };
