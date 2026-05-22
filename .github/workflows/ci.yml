@@ -54,6 +54,7 @@ jobs:
         run: |
           bunx adcp storyboard run http://127.0.0.1:3001/mcp \
             --auth $ADCP_TEST_TOKEN \
+            --test-kit node_modules/@adcp/sdk/compliance/cache/3.0.12/test-kits/acme-outdoor.yaml \
             --allow-http \
             --timeout 120 \
             --summary-output /tmp/summary.json 2>&1 | tee /tmp/storyboard.out
@@ -71,16 +72,16 @@ jobs:
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
           echo "| Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
-          echo "| Threshold (regression guard) | 128 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Threshold (regression guard) | 131 |" >> $GITHUB_STEP_SUMMARY
 
-      - name: Regression guard (must pass ≥128)
+      - name: Regression guard (must pass ≥131)
         run: |
           PASSED=${{ steps.parse.outputs.passed }}
-          if [ "$PASSED" -lt 128 ]; then
-            echo "::error::Regression: $PASSED < 128 baseline. Investigate failed storyboards before merging."
+          if [ "$PASSED" -lt 131 ]; then
+            echo "::error::Regression: $PASSED < 131 baseline. Investigate failed storyboards before merging."
             exit 1
           fi
-          echo "OK: $PASSED ≥ 128 baseline"
+          echo "OK: $PASSED ≥ 131 baseline"
 
       - name: Stop seller agent
         if: always()
