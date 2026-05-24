@@ -2,11 +2,14 @@ import { createAdcpServerFromPlatform, serve, verifyApiKey } from '@adcp/sdk/ser
 import { complyTest } from './comply.ts';
 import { runMigrations } from './db/migrations.ts';
 import { loadEnv } from './env.ts';
+import { log } from './observability/logger.ts';
+import { startHeartbeat } from './observability/heartbeat.ts';
 import { platform } from './platform.ts';
 import { idempotencyStore, mediaBuyStore, stateStore, taskRegistry } from './stores/index.ts';
 
 const env = loadEnv();
 await runMigrations();
+startHeartbeat();
 
 serve(
   ({ taskStore }) =>
@@ -42,5 +45,11 @@ serve(
   },
 );
 
-console.log(`Purrsonality seller agent listening on ${env.PUBLIC_BASE_URL}/mcp`);
-console.log(`Specialisms: sales-non-guaranteed`);
+log.info('startup', {
+  agent: 'purrsonality-seller',
+  version: '0.0.1',
+  listening_on: `${env.PUBLIC_BASE_URL}/mcp`,
+  specialisms: ['sales-non-guaranteed'],
+  database: env.DATABASE_URL ? 'postgres' : 'in-memory',
+  node_env: env.NODE_ENV,
+});

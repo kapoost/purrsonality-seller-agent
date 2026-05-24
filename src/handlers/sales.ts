@@ -5,6 +5,7 @@ import {
   type SalesPlatform,
   type SyncCreativesRow,
 } from '@adcp/sdk/server';
+import { instrumentHandlers } from '../observability/wrap.ts';
 import { FormatAsset } from '@adcp/sdk';
 import type {
   GetProductsRequest,
@@ -99,7 +100,7 @@ function buildPackageResponse(orderId: string, productId: string, budget: number
   } as unknown as Package;
 }
 
-export const sales: SalesPlatform<PurrAccountMeta> = defineSalesPlatform<PurrAccountMeta>({
+const rawSales = defineSalesPlatform<PurrAccountMeta>({
   async getProducts(req: GetProductsRequest, _ctx): Promise<GetProductsResponse> {
     const r = req as {
       buying_mode?: string;
@@ -605,3 +606,8 @@ export const sales: SalesPlatform<PurrAccountMeta> = defineSalesPlatform<PurrAcc
     } as unknown as ListCreativesResponse;
   },
 });
+
+export const sales: SalesPlatform<PurrAccountMeta> = instrumentHandlers(
+  'sales',
+  rawSales as unknown as Record<string, unknown>,
+) as unknown as SalesPlatform<PurrAccountMeta>;
