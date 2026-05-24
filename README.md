@@ -2,11 +2,11 @@
 
 A production-grade reference implementation of an **AdCP sales agent** in Bun + TypeScript, deployed to Fly.io with Postgres on Neon. Built for [purrsonality.pages.dev](https://purrsonality.pages.dev) — a cat-personality quiz that sells one display slot on the result page — and intentionally minimal so it can be read end-to-end.
 
-- **AdCP protocol:** 3.0 (via [`@adcp/sdk`](https://www.npmjs.com/package/@adcp/sdk) 7.10.1)
+- **AdCP protocol:** 3.0.12 (via [`@adcp/sdk`](https://www.npmjs.com/package/@adcp/sdk) 7.11.0)
 - **Runtime:** Bun 1.3 on Alpine
 - **Persistence:** Postgres (Neon), with in-memory fallback for dev
 - **Hosting:** Fly.io, scale-to-zero, region `fra` (co-located with Neon `eu-central-1`)
-- **Storyboard compliance:** 131/2 passed/failed (baseline gated in CI)
+- **Storyboard compliance:** 131 passed / 1 failed / 53 skipped (baseline gated in CI)
 
 If you are building an AdCP seller agent and want to see how the pieces fit together — handler shape, SDK wiring, sandbox vs live separation, dashboard observability — this repo is meant to read like a guided example.
 
@@ -143,8 +143,8 @@ Storyboard suite (from the official AdCP test kit) runs on every push. The CI gu
 
 Known protocol gaps tracked upstream:
 
-- [adcontextprotocol/adcp#4914](https://github.com/adcontextprotocol/adcp/issues/4914) — single-publisher pagination edge case (closed, fix landed in SDK 7.10.1)
-- [adcontextprotocol/adcp-client#1917](https://github.com/adcontextprotocol/adcp-client/issues/1917) — schema cache path bug; workaround in `scripts/postinstall.sh`
+- [adcontextprotocol/adcp#4914](https://github.com/adcontextprotocol/adcp/issues/4914) — `pagination_integrity_list_accounts` is structurally unsatisfiable for single-publisher first-party sellers. Closed COMPLETED upstream; the storyboard step still fails in the suite, which is the single known failure in this repo's baseline.
+- [adcontextprotocol/adcp-client#1917](https://github.com/adcontextprotocol/adcp-client/issues/1917) — schema cache path bug (`schemas/cache/` vs `dist/lib/schemas-data/`). Still open as of SDK 7.11.0; workaround in `scripts/postinstall.sh` symlinks the expected path.
 
 ---
 

@@ -74,14 +74,19 @@ jobs:
           echo "| Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
           echo "| Threshold (regression guard) | 131 |" >> $GITHUB_STEP_SUMMARY
 
-      - name: Regression guard (must pass ≥131)
+      - name: Regression guard (must pass ≥131, fail ≤1)
         run: |
           PASSED=${{ steps.parse.outputs.passed }}
+          FAILED=${{ steps.parse.outputs.failed }}
           if [ "$PASSED" -lt 131 ]; then
             echo "::error::Regression: $PASSED < 131 baseline. Investigate failed storyboards before merging."
             exit 1
           fi
-          echo "OK: $PASSED ≥ 131 baseline"
+          if [ "$FAILED" -gt 1 ]; then
+            echo "::error::New failure: $FAILED > 1 baseline (known: pagination_integrity_list_accounts/first_page, upstream #4914). Investigate before merging."
+            exit 1
+          fi
+          echo "OK: $PASSED passed ≥ 131 baseline, $FAILED failed ≤ 1 baseline"
 
       - name: Stop seller agent
         if: always()
