@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3001),
+  ADMIN_PORT: z.coerce.number().int().positive().optional(),
   ADCP_AUTH_TOKEN: z.string().min(8),
   ADCP_TEST_TOKEN: z.string().min(8).optional(),
   ADCP_PRIVATE_JWK: z.string().optional(),

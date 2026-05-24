@@ -1,4 +1,5 @@
 import { createAdcpServerFromPlatform, serve, verifyApiKey } from '@adcp/sdk/server';
+import { startAdminServer } from './admin/server.ts';
 import { complyTest } from './comply.ts';
 import { runMigrations } from './db/migrations.ts';
 import { loadEnv } from './env.ts';
@@ -10,6 +11,14 @@ import { idempotencyStore, mediaBuyStore, stateStore, taskRegistry } from './sto
 const env = loadEnv();
 await runMigrations();
 startHeartbeat();
+startAdminServer({
+  port: env.ADMIN_PORT ?? env.PORT + 1,
+  authToken: env.ADCP_AUTH_TOKEN,
+  agentName: 'purrsonality-seller',
+  agentVersion: '0.0.1',
+  databaseBackend: env.DATABASE_URL ? 'postgres' : 'in-memory',
+  nodeEnv: env.NODE_ENV,
+});
 
 serve(
   ({ taskStore }) =>

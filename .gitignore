@@ -7,3 +7,4 @@ spike/runtime-test.ts
 *.log
 .DS_Store
 ADDIE-RESPONSE.md
+.claude/
