@@ -3,15 +3,26 @@
 
 import { log } from './logger.ts';
 import { metrics } from './metrics.ts';
+import { pruneOld } from './metrics-store.ts';
 
 const DEFAULT_INTERVAL_MS = 60_000;
+const PRUNE_INTERVAL_MS = 24 * 60 * 60_000;  // daily
 
 let timer: ReturnType<typeof setInterval> | null = null;
+let lastPruneAt = 0;
 
 export function startHeartbeat(interval_ms = DEFAULT_INTERVAL_MS): void {
   if (timer) return;
   timer = setInterval(() => {
     log.info('metrics_snapshot', metrics.snapshot());
+    // Once per day, prune old metrics_events rows
+    const now = Date.now();
+    if (now - lastPruneAt >= PRUNE_INTERVAL_MS) {
+      lastPruneAt = now;
+      void pruneOld().then((deleted) => {
+        if (deleted > 0) log.info('metrics_pruned', { deleted });
+      });
+    }
   }, interval_ms);
   // SIGUSR1: kill -USR1 <pid> to dump snapshot immediately
   process.on('SIGUSR1', () => {

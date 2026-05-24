@@ -5,11 +5,13 @@ import { runMigrations } from './db/migrations.ts';
 import { loadEnv } from './env.ts';
 import { log } from './observability/logger.ts';
 import { startHeartbeat } from './observability/heartbeat.ts';
+import { startMetricsFlusher } from './observability/metrics-store.ts';
 import { platform } from './platform.ts';
 import { idempotencyStore, mediaBuyStore, stateStore, taskRegistry } from './stores/index.ts';
 
 const env = loadEnv();
 await runMigrations();
+startMetricsFlusher();
 startHeartbeat();
 startAdminServer({
   port: env.ADMIN_PORT ?? env.PORT + 1,

@@ -13,6 +13,8 @@
 
 import { join } from 'node:path';
 import { metrics } from '../observability/metrics.ts';
+import { queryMetrics } from '../observability/metrics-store.ts';
+import { getPool } from '../db/pool.ts';
 import { log } from '../observability/logger.ts';
 
 interface AdminConfig {
@@ -59,7 +61,9 @@ export function startAdminServer(cfg: AdminConfig): void {
         );
       }
 
-      // Protected: metrics snapshot
+      // Protected: hybrid metrics — process info (in-memory) + aggregated
+      // window from Postgres (survives restarts). Window selectable via
+      // ?window=1h|24h|7d (default 24h). No Postgres → persistent_disabled.
       if (url.pathname === '/api/metrics') {
         const auth = req.headers.get('authorization');
         const tokenFromQuery = url.searchParams.get('token');
@@ -70,7 +74,40 @@ export function startAdminServer(cfg: AdminConfig): void {
             { status: 401, headers: corsHeaders },
           );
         }
-        return Response.json(metrics.snapshot(), { headers: corsHeaders });
+
+        const windowKey = url.searchParams.get('window') ?? '24h';
+        const snap = metrics.snapshot();
+        const processInfo = {
+          uptime_s: snap.uptime_s,
+          memory_mb: snap.memory_mb,
+        };
+
+        if (!getPool()) {
+          return Response.json(
+            {
+              process: processInfo,
+              persistent_disabled: true,
+              persistent_disabled_reason: 'no_database_url',
+            },
+            { headers: corsHeaders },
+          );
+        }
+
+        try {
+          const persistent = await queryMetrics(windowKey);
+          return Response.json(
+            { process: processInfo, ...persistent },
+            { headers: corsHeaders },
+          );
+        } catch (err) {
+          return Response.json(
+            {
+              process: processInfo,
+              persistent_error: (err as Error).message?.slice(0, 200),
+            },
+            { status: 500, headers: corsHeaders },
+          );
+        }
       }
 
       // Static dashboard HTML

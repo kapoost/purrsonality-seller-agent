@@ -71,7 +71,13 @@
   <div class="panel">
     <div class="toolbar">
       <label for="token" style="color: var(--muted); font-size: 11px;">TOKEN</label>
-      <input id="token" type="password" placeholder="ADCP_AUTH_TOKEN" style="flex: 1; max-width: 400px;" autocomplete="off">
+      <input id="token" type="password" placeholder="ADCP_AUTH_TOKEN" style="flex: 1; max-width: 320px;" autocomplete="off">
+      <label for="window" style="color: var(--muted); font-size: 11px;">WINDOW</label>
+      <select id="window">
+        <option value="1h">last 1h</option>
+        <option value="24h" selected>last 24h</option>
+        <option value="7d">last 7d</option>
+      </select>
       <button id="refresh">Refresh</button>
       <button id="auto" class="ghost">Auto: <span id="auto-state">OFF</span></button>
       <span class="status-line" id="status">—</span>
@@ -79,28 +85,29 @@
   </div>
 
   <div class="panel">
-    <h2>Process</h2>
+    <h2>Process <span style="color: var(--muted); font-weight: normal; text-transform: none; letter-spacing: 0;">(in-memory, since current boot)</span></h2>
     <div class="grid" id="process-grid">
       <div class="stat"><div class="label">uptime</div><div class="value" id="uptime">—</div></div>
       <div class="stat"><div class="label">memory rss</div><div class="value" id="mem-rss">—</div><div class="sub" id="mem-heap">heap —</div></div>
-      <div class="stat"><div class="label">total tool calls</div><div class="value" id="total-calls">—</div></div>
-      <div class="stat"><div class="label">total errors</div><div class="value" id="total-errors">—</div></div>
+      <div class="stat"><div class="label">total calls <span id="window-label-1" style="color: var(--muted); font-size: 11px;">(last 24h)</span></div><div class="value" id="total-calls">—</div></div>
+      <div class="stat"><div class="label">total errors <span id="window-label-2" style="color: var(--muted); font-size: 11px;">(last 24h)</span></div><div class="value" id="total-errors">—</div></div>
     </div>
+    <div id="persistent-warning" style="display: none; margin-top: 12px; padding: 8px 12px; background: rgba(251, 191, 36, 0.1); border-left: 3px solid var(--warn); border-radius: 3px; font-size: 12px; color: var(--warn);"></div>
   </div>
 
   <div class="panel">
-    <h2>Tool counters</h2>
-    <table id="counters-table">
-      <thead><tr><th>Tool</th><th class="num">Calls</th><th class="num">Errors</th><th>Error classes</th></tr></thead>
-      <tbody><tr><td colspan="4" class="empty">no data yet — waiting for first call</td></tr></tbody>
+    <h2>Tools <span id="window-label-3" style="color: var(--muted); font-weight: normal; text-transform: none; letter-spacing: 0;">(last 24h, persistent)</span></h2>
+    <table id="tools-table">
+      <thead><tr><th>Tool</th><th class="num">Calls</th><th class="num">Errors</th><th class="num">avg ms</th><th class="num">p50</th><th class="num">p95</th><th class="num">p99</th><th class="num">max</th></tr></thead>
+      <tbody><tr><td colspan="8" class="empty">no data in window</td></tr></tbody>
     </table>
   </div>
 
   <div class="panel">
-    <h2>Tool latencies (ms)</h2>
-    <table id="durations-table">
-      <thead><tr><th>Tool</th><th class="num">N</th><th class="num">avg</th><th class="num">p50</th><th class="num">p95</th><th class="num">p99</th><th class="num">max</th></tr></thead>
-      <tbody><tr><td colspan="7" class="empty">no data yet</td></tr></tbody>
+    <h2>Errors <span id="window-label-4" style="color: var(--muted); font-weight: normal; text-transform: none; letter-spacing: 0;">(last 24h)</span></h2>
+    <table id="errors-table">
+      <thead><tr><th>Tool</th><th>Error class</th><th class="num">Count</th></tr></thead>
+      <tbody><tr><td colspan="3" class="empty">no errors in window</td></tr></tbody>
     </table>
   </div>
 
@@ -109,9 +116,26 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const tokenInput = $('token');
+const windowSelect = $('window');
 const stored = localStorage.getItem('purrsonality-admin-token');
 if (stored) tokenInput.value = stored;
+const storedWindow = localStorage.getItem('purrsonality-admin-window');
+if (storedWindow) windowSelect.value = storedWindow;
 tokenInput.addEventListener('change', () => localStorage.setItem('purrsonality-admin-token', tokenInput.value));
+windowSelect.addEventListener('change', () => {
+  localStorage.setItem('purrsonality-admin-window', windowSelect.value);
+  updateWindowLabels();
+  loadMetrics();
+});
+
+function updateWindowLabels() {
+  const txt = `(${windowSelect.options[windowSelect.selectedIndex].text}, persistent)`;
+  const shortTxt = `(${windowSelect.options[windowSelect.selectedIndex].text})`;
+  $('window-label-1').textContent = shortTxt;
+  $('window-label-2').textContent = shortTxt;
+  $('window-label-3').textContent = txt;
+  $('window-label-4').textContent = shortTxt;
+}
 
 let autoTimer = null;
 const AUTO_INTERVAL_MS = 30_000;
@@ -151,7 +175,8 @@ async function loadMetrics() {
     return;
   }
   try {
-    const res = await fetch('/api/metrics', { headers: { 'Authorization': 'Bearer ' + token } });
+    const url = '/api/metrics?window=' + encodeURIComponent(windowSelect.value);
+    const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
     if (res.status === 401) {
       setStatus('Unauthorized — token wrong?', 'error');
       $('health-badge').textContent = '401';
@@ -172,58 +197,57 @@ async function loadMetrics() {
 }
 
 function render(j) {
-  // Process
-  $('uptime').textContent = fmtUptime(j.uptime_s);
-  $('mem-rss').textContent = (j.memory_mb?.rss ?? '—') + ' MB';
-  $('mem-heap').textContent = `heap ${j.memory_mb?.heap_used ?? '—'} / ${j.memory_mb?.heap_total ?? '—'} MB`;
+  // Process (in-memory)
+  const proc = j.process ?? {};
+  $('uptime').textContent = fmtUptime(proc.uptime_s);
+  $('mem-rss').textContent = (proc.memory_mb?.rss ?? '—') + ' MB';
+  $('mem-heap').textContent = `heap ${proc.memory_mb?.heap_used ?? '—'} / ${proc.memory_mb?.heap_total ?? '—'} MB`;
 
-  const calls = j.counters?.tool_calls_total ?? {};
-  const errs = j.counters?.tool_errors_total ?? {};
-  const durs = j.durations?.tool_duration_ms ?? {};
-
-  const totalCalls = Object.values(calls).reduce((a, b) => a + b, 0);
-  const totalErrors = Object.values(errs).reduce((a, b) => a + b, 0);
-  $('total-calls').textContent = totalCalls;
-  $('total-errors').textContent = totalErrors;
-
-  // Counters table — group by tool
-  const errorsByTool = {};
-  for (const [key, count] of Object.entries(errs)) {
-    const [tool, cls] = key.split('|');
-    if (!errorsByTool[tool]) errorsByTool[tool] = {};
-    errorsByTool[tool][cls || 'unknown'] = count;
+  // Persistent warning banner (if DB disabled/error)
+  const warn = $('persistent-warning');
+  if (j.persistent_disabled) {
+    warn.style.display = 'block';
+    warn.textContent = `Persistent metrics disabled (${j.persistent_disabled_reason ?? 'unknown'}). Showing process info only.`;
+  } else if (j.persistent_error) {
+    warn.style.display = 'block';
+    warn.textContent = `Persistent metrics error: ${j.persistent_error}`;
+  } else {
+    warn.style.display = 'none';
   }
-  const tools = Object.keys(calls).sort((a, b) => calls[b] - calls[a]);
-  const cTbody = $('counters-table').querySelector('tbody');
+
+  // Totals (from persistent window)
+  $('total-calls').textContent = j.total_calls ?? '—';
+  $('total-errors').textContent = j.total_errors ?? '—';
+
+  // Tools table
+  const tools = Array.isArray(j.tools) ? j.tools : [];
+  const tTbody = $('tools-table').querySelector('tbody');
   if (tools.length === 0) {
-    cTbody.innerHTML = '<tr><td colspan="4" class="empty">no calls yet</td></tr>';
+    tTbody.innerHTML = '<tr><td colspan="8" class="empty">no data in window</td></tr>';
   } else {
-    cTbody.innerHTML = tools.map(t => {
-      const errs = errorsByTool[t] ?? {};
-      const errSum = Object.values(errs).reduce((a, b) => a + b, 0);
-      const errClasses = Object.entries(errs).map(([c, n]) => `${escapeHtml(c)} (${n})`).join(', ') || '—';
-      return `<tr><td>${escapeHtml(t)}</td><td class="num">${calls[t]}</td><td class="num">${errSum}</td><td>${errClasses}</td></tr>`;
-    }).join('');
+    tTbody.innerHTML = tools.map(t => `<tr>
+      <td>${escapeHtml(t.tool)}</td>
+      <td class="num">${t.calls}</td>
+      <td class="num">${t.errors}</td>
+      <td class="num">${t.avg_ms}</td>
+      <td class="num">${t.p50_ms}</td>
+      <td class="num">${t.p95_ms}</td>
+      <td class="num">${t.p99_ms}</td>
+      <td class="num">${t.max_ms}</td>
+    </tr>`).join('');
   }
 
-  // Durations table
-  const dTbody = $('durations-table').querySelector('tbody');
-  const durToolsSorted = Object.keys(durs).sort((a, b) => (durs[b]?.p95_ms ?? 0) - (durs[a]?.p95_ms ?? 0));
-  if (durToolsSorted.length === 0) {
-    dTbody.innerHTML = '<tr><td colspan="7" class="empty">no durations yet</td></tr>';
+  // Errors table
+  const errors = Array.isArray(j.errors) ? j.errors : [];
+  const eTbody = $('errors-table').querySelector('tbody');
+  if (errors.length === 0) {
+    eTbody.innerHTML = '<tr><td colspan="3" class="empty">no errors in window</td></tr>';
   } else {
-    dTbody.innerHTML = durToolsSorted.map(t => {
-      const d = durs[t];
-      return `<tr>
-        <td>${escapeHtml(t)}</td>
-        <td class="num">${d.count}</td>
-        <td class="num">${d.avg_ms}</td>
-        <td class="num">${d.p50_ms}</td>
-        <td class="num">${d.p95_ms}</td>
-        <td class="num">${d.p99_ms}</td>
-        <td class="num">${d.max_ms}</td>
-      </tr>`;
-    }).join('');
+    eTbody.innerHTML = errors.map(e => `<tr>
+      <td>${escapeHtml(e.tool)}</td>
+      <td>${escapeHtml(e.error_class)}</td>
+      <td class="num">${e.count}</td>
+    </tr>`).join('');
   }
 }
 
@@ -243,6 +267,7 @@ $('auto').addEventListener('click', () => {
   }
 });
 
+updateWindowLabels();
 loadInfo();
 if (stored) loadMetrics();
 </script>

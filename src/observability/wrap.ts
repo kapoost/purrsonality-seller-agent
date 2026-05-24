@@ -7,6 +7,7 @@
 import { createHash } from 'node:crypto';
 import { log } from './logger.ts';
 import { metrics } from './metrics.ts';
+import { recordEvent } from './metrics-store.ts';
 
 function hashAccountId(id: string | undefined | null): string {
   if (!id) return 'anonymous';
@@ -67,6 +68,12 @@ export function withMonitoring<TArgs extends unknown[], TRet>(
       const result = await fn(...args);
       const duration_ms = Date.now() - started;
       metrics.observe('tool_duration_ms', toolName, duration_ms);
+      recordEvent({
+        tool: toolName,
+        duration_ms,
+        error_class: null,
+        account_id_hash: accountHash,
+      });
       log.info('tool_call', {
         tool: toolName,
         account_hash: accountHash,
@@ -80,6 +87,12 @@ export function withMonitoring<TArgs extends unknown[], TRet>(
       const errClass = error.code ?? error.name ?? 'UnknownError';
       metrics.inc('tool_errors_total', `${toolName}|${errClass}`);
       metrics.observe('tool_duration_ms', toolName, duration_ms);
+      recordEvent({
+        tool: toolName,
+        duration_ms,
+        error_class: errClass,
+        account_id_hash: accountHash,
+      });
       log.error('tool_call', {
         tool: toolName,
         account_hash: accountHash,
