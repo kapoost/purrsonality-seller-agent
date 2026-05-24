@@ -5,6 +5,9 @@
 FROM oven/bun:1.3.14-alpine AS install
 WORKDIR /app
 COPY package.json bun.lock ./
+# scripts/ must be copied BEFORE bun install — postinstall hook runs at install time
+# and references scripts/postinstall.sh (schema cache symlink workaround for adcp-client#1917).
+COPY scripts ./scripts
 RUN bun install --frozen-lockfile --production
 
 FROM oven/bun:1.3.14-alpine AS runtime

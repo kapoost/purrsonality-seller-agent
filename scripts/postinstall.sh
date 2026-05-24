@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Workaround for adcontextprotocol/adcp-client#1917 — @adcp/sdk@7.10.x
 # packaging bug: v2/projection registry loader looks for schemas at
 # `schemas/cache/` but the SDK ships them at `dist/lib/schemas-data/`.
