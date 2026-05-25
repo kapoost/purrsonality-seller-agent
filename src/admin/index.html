@@ -111,6 +111,27 @@
     </table>
   </div>
 
+  <div class="panel">
+    <h2>Audit log <span id="window-label-5" style="color: var(--muted); font-weight: normal; text-transform: none; letter-spacing: 0;">(last 24h, raw events)</span></h2>
+    <div class="toolbar" style="margin-bottom: 12px;">
+      <label for="audit-tool" style="color: var(--muted); font-size: 11px;">TOOL</label>
+      <select id="audit-tool">
+        <option value="">all</option>
+      </select>
+      <label style="color: var(--muted); font-size: 11px; display: flex; align-items: center; gap: 4px;">
+        <input id="audit-errors" type="checkbox"> errors only
+      </label>
+      <label for="audit-limit" style="color: var(--muted); font-size: 11px;">LIMIT</label>
+      <input id="audit-limit" type="number" min="1" max="500" value="100" style="width: 80px;">
+      <button id="audit-load" class="ghost">Reload</button>
+      <span class="status-line" id="audit-status">—</span>
+    </div>
+    <table id="audit-table">
+      <thead><tr><th>Timestamp</th><th>Tool</th><th class="num">ms</th><th>Error</th><th>Account</th></tr></thead>
+      <tbody><tr><td colspan="5" class="empty">click Reload to fetch events</td></tr></tbody>
+    </table>
+  </div>
+
 </div>
 
 <script>
@@ -135,6 +156,7 @@ function updateWindowLabels() {
   $('window-label-2').textContent = shortTxt;
   $('window-label-3').textContent = txt;
   $('window-label-4').textContent = shortTxt;
+  $('window-label-5').textContent = `(${windowSelect.options[windowSelect.selectedIndex].text}, raw events)`;
 }
 
 let autoTimer = null;
@@ -219,7 +241,7 @@ function render(j) {
   $('total-calls').textContent = j.total_calls ?? '—';
   $('total-errors').textContent = j.total_errors ?? '—';
 
-  // Tools table
+  // Tools table — also seeds the audit-tool dropdown from observed names
   const tools = Array.isArray(j.tools) ? j.tools : [];
   const tTbody = $('tools-table').querySelector('tbody');
   if (tools.length === 0) {
@@ -235,6 +257,7 @@ function render(j) {
       <td class="num">${t.p99_ms}</td>
       <td class="num">${t.max_ms}</td>
     </tr>`).join('');
+    syncAuditToolOptions(tools.map(t => t.tool));
   }
 
   // Errors table
@@ -254,6 +277,92 @@ function render(j) {
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+
+// === Audit log ===
+const auditToolSelect = $('audit-tool');
+const auditErrors = $('audit-errors');
+const auditLimit = $('audit-limit');
+const storedAuditTool = localStorage.getItem('purrsonality-audit-tool');
+const storedAuditErrors = localStorage.getItem('purrsonality-audit-errors');
+if (storedAuditErrors === '1') auditErrors.checked = true;
+
+function syncAuditToolOptions(toolNames) {
+  // Keep "all" + previously selected option (even if absent in fresh window).
+  const current = auditToolSelect.value;
+  const known = new Set(toolNames);
+  if (current && !known.has(current)) known.add(current);
+  auditToolSelect.innerHTML = '<option value="">all</option>' +
+    [...known].sort().map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+  if (storedAuditTool && [...known, ''].includes(storedAuditTool)) {
+    auditToolSelect.value = storedAuditTool;
+  } else if (current) {
+    auditToolSelect.value = current;
+  }
+}
+
+function setAuditStatus(text, kind) {
+  const el = $('audit-status');
+  el.textContent = text;
+  el.className = 'status-line' + (kind === 'error' ? ' error' : '');
+}
+
+async function loadAudit() {
+  const token = tokenInput.value.trim();
+  if (!token) {
+    setAuditStatus('Token required.', 'error');
+    return;
+  }
+  const params = new URLSearchParams({ window: windowSelect.value });
+  if (auditToolSelect.value) params.set('tool', auditToolSelect.value);
+  if (auditErrors.checked) params.set('errors', '1');
+  if (auditLimit.value) params.set('limit', auditLimit.value);
+  try {
+    const res = await fetch('/api/audit?' + params, { headers: { 'Authorization': 'Bearer ' + token } });
+    if (res.status === 401) { setAuditStatus('Unauthorized', 'error'); return; }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    renderAudit(j.events ?? []);
+    setAuditStatus('loaded ' + (j.events?.length ?? 0) + ' @ ' + new Date().toLocaleTimeString());
+  } catch (err) {
+    setAuditStatus('Failed: ' + err.message, 'error');
+  }
+}
+
+function renderAudit(events) {
+  const tbody = $('audit-table').querySelector('tbody');
+  if (events.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">no events match filters</td></tr>';
+    return;
+  }
+  tbody.innerHTML = events.map(e => {
+    const ts = new Date(e.ts).toLocaleString();
+    const err = e.error_class ? `<span style="color: var(--err)">${escapeHtml(e.error_class)}</span>` : '—';
+    const acct = e.account_id_hash ?? '—';
+    return `<tr>
+      <td style="font-size: 11px;">${escapeHtml(ts)}</td>
+      <td>${escapeHtml(e.tool)}</td>
+      <td class="num">${e.duration_ms}</td>
+      <td>${err}</td>
+      <td style="font-family: Menlo, monospace; font-size: 11px;">${escapeHtml(acct)}</td>
+    </tr>`;
+  }).join('');
+}
+
+auditToolSelect.addEventListener('change', () => {
+  localStorage.setItem('purrsonality-audit-tool', auditToolSelect.value);
+  loadAudit();
+});
+auditErrors.addEventListener('change', () => {
+  localStorage.setItem('purrsonality-audit-errors', auditErrors.checked ? '1' : '0');
+  loadAudit();
+});
+$('audit-load').addEventListener('click', loadAudit);
+// Auto-load when metrics auto-refresh fires
+const _originalLoadMetrics = loadMetrics;
+loadMetrics = async function() {
+  await _originalLoadMetrics();
+  if (autoTimer) await loadAudit();
+};
 
 $('refresh').addEventListener('click', loadMetrics);
 $('auto').addEventListener('click', () => {

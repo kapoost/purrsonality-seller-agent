@@ -183,6 +183,59 @@ export async function queryMetrics(windowKey: string): Promise<MetricsDbSnapshot
   };
 }
 
+export interface AuditEvent {
+  id: number;
+  ts: string;
+  tool: string;
+  duration_ms: number;
+  error_class: string | null;
+  account_id_hash: string | null;
+}
+
+interface AuditQuery {
+  windowKey: string;
+  tool?: string;
+  onlyErrors?: boolean;
+  limit?: number;
+}
+
+export async function queryAuditEvents(q: AuditQuery): Promise<AuditEvent[] | null> {
+  const pool = getPool();
+  if (!pool) return null;
+
+  const win = WINDOW_INTERVALS[q.windowKey] ?? WINDOW_INTERVALS['24h']!;
+  const limit = Math.min(500, Math.max(1, q.limit ?? 100));
+
+  // Parameterised dynamic filter — tool & errors clauses opt-in.
+  const conds: string[] = [`ts >= NOW() - ${win.sql}`];
+  const params: unknown[] = [];
+  if (q.tool) {
+    params.push(q.tool);
+    conds.push(`tool = $${params.length}`);
+  }
+  if (q.onlyErrors) {
+    conds.push(`error_class IS NOT NULL`);
+  }
+  params.push(limit);
+
+  const sql = `
+    SELECT id, ts, tool, duration_ms, error_class, account_id_hash
+    FROM metrics_events
+    WHERE ${conds.join(' AND ')}
+    ORDER BY ts DESC
+    LIMIT $${params.length}
+  `;
+  const res = await pool.query(sql, params);
+  return res.rows.map((r: Record<string, unknown>) => ({
+    id: Number(r['id']),
+    ts: r['ts'] instanceof Date ? (r['ts'] as Date).toISOString() : String(r['ts']),
+    tool: String(r['tool']),
+    duration_ms: Number(r['duration_ms']),
+    error_class: r['error_class'] == null ? null : String(r['error_class']),
+    account_id_hash: r['account_id_hash'] == null ? null : String(r['account_id_hash']),
+  }));
+}
+
 export async function pruneOld(): Promise<number> {
   const pool = getPool();
   if (!pool) return 0;

@@ -13,7 +13,7 @@
 
 import { join } from 'node:path';
 import { metrics } from '../observability/metrics.ts';
-import { queryMetrics } from '../observability/metrics-store.ts';
+import { queryMetrics, queryAuditEvents } from '../observability/metrics-store.ts';
 import { getPool } from '../db/pool.ts';
 import { log } from '../observability/logger.ts';
 
@@ -105,6 +105,48 @@ export function startAdminServer(cfg: AdminConfig): void {
               process: processInfo,
               persistent_error: (err as Error).message?.slice(0, 200),
             },
+            { status: 500, headers: corsHeaders },
+          );
+        }
+      }
+
+      // Protected: per-call audit log tail. Same persistence layer as
+      // /api/metrics (Postgres metrics_events table) — this endpoint just
+      // returns raw rows ordered by recency, with optional filters for
+      // operator triage (which tool, errors only, last N).
+      if (url.pathname === '/api/audit') {
+        const auth = req.headers.get('authorization');
+        const tokenFromQuery = url.searchParams.get('token');
+        const provided = auth?.startsWith('Bearer ') ? auth.slice(7) : tokenFromQuery;
+        if (provided !== cfg.authToken) {
+          return Response.json(
+            { error: 'unauthorized' },
+            { status: 401, headers: corsHeaders },
+          );
+        }
+        if (!getPool()) {
+          return Response.json(
+            { events: [], persistent_disabled: true, persistent_disabled_reason: 'no_database_url' },
+            { headers: corsHeaders },
+          );
+        }
+        const windowKey = url.searchParams.get('window') ?? '24h';
+        const tool = url.searchParams.get('tool') ?? undefined;
+        const onlyErrors = url.searchParams.get('errors') === '1';
+        const limitStr = url.searchParams.get('limit');
+        const limit = limitStr ? Number.parseInt(limitStr, 10) : undefined;
+        try {
+          const queryArgs: Parameters<typeof queryAuditEvents>[0] = { windowKey, onlyErrors };
+          if (tool) queryArgs.tool = tool;
+          if (typeof limit === 'number' && !Number.isNaN(limit)) queryArgs.limit = limit;
+          const events = await queryAuditEvents(queryArgs);
+          return Response.json(
+            { window: windowKey, tool, only_errors: onlyErrors, events },
+            { headers: corsHeaders },
+          );
+        } catch (err) {
+          return Response.json(
+            { error: 'query_failed', message: (err as Error).message?.slice(0, 200) },
             { status: 500, headers: corsHeaders },
           );
         }
