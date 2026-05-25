@@ -22,6 +22,29 @@ const METRICS_EVENTS_MIGRATION = `
   CREATE INDEX IF NOT EXISTS metrics_events_tool_ts_idx ON metrics_events (tool, ts DESC);
 `;
 
+// Creative library — persistent state for sync_creatives / list_creatives
+// + operator review workflow (admin dashboard). Status follows AdCP
+// /schemas/3.0.12/enums/creative-status.json:
+//   processing | pending_review | approved | rejected | archived
+// Sandbox principals auto-approve (storyboards expect this); live
+// principals submit at pending_review and need an operator approve/reject
+// via /api/creatives/:id/{approve,reject}.
+const CREATIVES_MIGRATION = `
+  CREATE TABLE IF NOT EXISTS creatives (
+    creative_id TEXT PRIMARY KEY,
+    account_id_hash TEXT,
+    format_id JSONB NOT NULL,
+    name TEXT,
+    assets JSONB,
+    status TEXT NOT NULL DEFAULT 'approved',
+    submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    reviewed_at TIMESTAMPTZ,
+    review_note TEXT
+  );
+  CREATE INDEX IF NOT EXISTS creatives_status_submitted_idx ON creatives (status, submitted_at DESC);
+  CREATE INDEX IF NOT EXISTS creatives_account_idx ON creatives (account_id_hash);
+`;
+
 export async function runMigrations(): Promise<void> {
   const pool = getPool();
   if (!pool) {
@@ -33,5 +56,6 @@ export async function runMigrations(): Promise<void> {
   await pool.query(ADCP_STATE_MIGRATION);
   await pool.query(REPLAY_CACHE_MIGRATION);
   await pool.query(METRICS_EVENTS_MIGRATION);
+  await pool.query(CREATIVES_MIGRATION);
   console.log('[db] Migrations complete.');
 }

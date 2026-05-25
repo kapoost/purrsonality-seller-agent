@@ -38,11 +38,21 @@ import type {
   MediaBuyStatus,
   Package,
 } from '@adcp/sdk';
+import { createHash } from 'node:crypto';
 import { PUBLISHER } from '../config/purrsonality.ts';
 import { mockUpstream } from '../upstream/mock.ts';
+import { creativesStore } from '../stores/creatives.ts';
 import type { PurrAccountMeta } from '../handlers/accounts.ts';
 import type { InventoryAdapter } from './base.ts';
 import { simulateDelivery } from './sandbox/delivery-simulator.ts';
+
+function hashAccountId(id: string | null | undefined): string | null {
+  if (!id) return null;
+  // Same 8-char prefix as observability/wrap.ts so audit + creative views
+  // join on the same column. Privacy: keeps account identifier opaque on
+  // the operator side while still allowing per-buyer drill-down.
+  return createHash('sha256').update(id).digest('hex').slice(0, 8);
+}
 
 const FORMAT_AGENT_URL = `${process.env['PUBLIC_BASE_URL'] ?? 'http://127.0.0.1:3001'}/mcp`;
 
@@ -606,39 +616,104 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
   async syncCreatives(creatives, ctx): Promise<SyncCreativesRow[]> {
     const list = Array.isArray(creatives) ? creatives : [];
     const accountId = ctx.account?.id;
-    return list.map((c) => {
-      const cAny = c as unknown as Record<string, unknown>;
-      const id = (cAny['creative_id'] as string) ?? `creative_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      mockUpstream.seedCreative(id, cAny, accountId);
-      return {
-        creative_id: id,
-        action: 'created' as const,
-        status: 'approved' as const,
-      };
-    }) as unknown as SyncCreativesRow[];
-  },
+    const accountIdHash = hashAccountId(accountId);
+    // Sandbox principals bypass the review queue so storyboards (which assume
+    // status=approved on first sync) keep passing. Live principals submit
+    // at pending_review and need an operator decision via /api/creatives.
+    const autoApprove = (ctx.account as { mode?: string } | undefined)?.mode === 'sandbox';
 
-  async listCreatives(req: ListCreativesRequest, ctx): Promise<ListCreativesResponse> {
-    const r = (req ?? {}) as { pagination?: { max_results?: number; cursor?: string } };
-    const raw = mockUpstream.listCreatives(ctx.account?.id);
-    const nowIso = new Date().toISOString();
-    const normalized = raw.map((c) => {
-      const cAny = c as Record<string, unknown>;
+    const results: SyncCreativesRow[] = [];
+    for (const c of list) {
+      const cAny = c as unknown as Record<string, unknown>;
+      const id =
+        (cAny['creative_id'] as string) ??
+        `creative_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+      // Keep the mockUpstream copy too — it's still the source of truth for
+      // legacy storyboard probes that read seededCreatives directly. Postgres
+      // creativesStore is the new operator-visible truth.
+      mockUpstream.seedCreative(id, cAny, accountId);
+
       const formatRef = cAny['format_id'] as { agent_url?: string; id?: string } | string | undefined;
       const formatId =
         typeof formatRef === 'object' && formatRef !== null
           ? { agent_url: formatRef.agent_url ?? FORMAT_AGENT_URL, id: formatRef.id ?? 'display_300x250' }
           : { agent_url: FORMAT_AGENT_URL, id: typeof formatRef === 'string' ? formatRef : 'display_300x250' };
-      return {
-        creative_id: (cAny['creative_id'] as string) ?? `seeded_${Date.now()}`,
-        name: (cAny['name'] as string) ?? (cAny['creative_id'] as string) ?? 'seeded creative',
+
+      const submission = await creativesStore.submit({
+        creative_id: id,
+        account_id_hash: accountIdHash,
         format_id: formatId,
-        assets: (cAny['assets'] as Record<string, unknown>) ?? {},
-        status: (cAny['status'] as string) ?? 'approved',
-        created_date: (cAny['created_date'] as string) ?? nowIso,
-        updated_date: (cAny['updated_date'] as string) ?? nowIso,
-      };
+        name: (cAny['name'] as string) ?? null,
+        assets: (cAny['assets'] as Record<string, unknown>) ?? null,
+        autoApprove,
+      });
+
+      results.push({
+        creative_id: submission.creative_id,
+        action: submission.action,
+        status: submission.status,
+      } as SyncCreativesRow);
+    }
+    return results;
+  },
+
+  async listCreatives(req: ListCreativesRequest, ctx): Promise<ListCreativesResponse> {
+    const r = (req ?? {}) as { pagination?: { max_results?: number; cursor?: string } };
+    const accountIdHash = hashAccountId(ctx.account?.id);
+    const persistent = await creativesStore.list({
+      ...(accountIdHash !== null && { accountIdHash }),
+      limit: 500,
     });
+
+    // Fall back to mockUpstream rows when Postgres returned nothing — keeps
+    // legacy storyboard fixtures (seed via mockUpstream.seedCreative outside
+    // sync_creatives) visible. Persistent rows win when present.
+    const fromPersistent = persistent.map((row) => ({
+      creative_id: row.creative_id,
+      name: row.name ?? row.creative_id,
+      format_id: row.format_id as { agent_url: string; id: string },
+      assets: row.assets ?? {},
+      status: row.status,
+      created_date: row.submitted_at,
+      updated_date: row.reviewed_at ?? row.submitted_at,
+    }));
+
+    // Widening: persistent rows carry CreativeStatus enum; the mockUpstream
+    // fallback may return non-enum strings (legacy fixtures). Use a generic
+    // string status to accept both.
+    interface ListRow {
+      creative_id: string;
+      name: string;
+      format_id: { agent_url: string; id: string };
+      assets: Record<string, unknown>;
+      status: string;
+      created_date: string;
+      updated_date: string;
+    }
+    let normalized: ListRow[] = fromPersistent as ListRow[];
+    if (normalized.length === 0) {
+      const raw = mockUpstream.listCreatives(ctx.account?.id);
+      const nowIso = new Date().toISOString();
+      normalized = raw.map((c) => {
+        const cAny = c as Record<string, unknown>;
+        const formatRef = cAny['format_id'] as { agent_url?: string; id?: string } | string | undefined;
+        const formatId =
+          typeof formatRef === 'object' && formatRef !== null
+            ? { agent_url: formatRef.agent_url ?? FORMAT_AGENT_URL, id: formatRef.id ?? 'display_300x250' }
+            : { agent_url: FORMAT_AGENT_URL, id: typeof formatRef === 'string' ? formatRef : 'display_300x250' };
+        return {
+          creative_id: (cAny['creative_id'] as string) ?? `seeded_${Date.now()}`,
+          name: (cAny['name'] as string) ?? (cAny['creative_id'] as string) ?? 'seeded creative',
+          format_id: formatId,
+          assets: (cAny['assets'] as Record<string, unknown>) ?? {},
+          status: (cAny['status'] as string) ?? 'approved',
+          created_date: (cAny['created_date'] as string) ?? nowIso,
+          updated_date: (cAny['updated_date'] as string) ?? nowIso,
+        };
+      });
+    }
+
     const pageSize = Math.max(1, Math.min(100, r.pagination?.max_results ?? 100));
     const offset = Number.parseInt(r.pagination?.cursor ?? '0', 10) || 0;
     const page = normalized.slice(offset, offset + pageSize);

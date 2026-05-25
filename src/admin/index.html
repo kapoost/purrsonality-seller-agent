@@ -112,6 +112,28 @@
   </div>
 
   <div class="panel">
+    <h2>Creative review</h2>
+    <div class="toolbar" style="margin-bottom: 12px;">
+      <label for="creative-status" style="color: var(--muted); font-size: 11px;">STATUS</label>
+      <select id="creative-status">
+        <option value="pending_review" selected>pending_review</option>
+        <option value="approved">approved</option>
+        <option value="rejected">rejected</option>
+        <option value="archived">archived</option>
+        <option value="">all</option>
+      </select>
+      <label for="creative-limit" style="color: var(--muted); font-size: 11px;">LIMIT</label>
+      <input id="creative-limit" type="number" min="1" max="500" value="50" style="width: 80px;">
+      <button id="creative-load" class="ghost">Reload</button>
+      <span class="status-line" id="creative-status-line">—</span>
+    </div>
+    <table id="creative-table">
+      <thead><tr><th>Submitted</th><th>Creative ID</th><th>Format</th><th>Account</th><th>Status</th><th>Note</th><th>Actions</th></tr></thead>
+      <tbody><tr><td colspan="7" class="empty">click Reload to fetch creatives</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
     <h2>Audit log <span id="window-label-5" style="color: var(--muted); font-weight: normal; text-transform: none; letter-spacing: 0;">(last 24h, raw events)</span></h2>
     <div class="toolbar" style="margin-bottom: 12px;">
       <label for="audit-tool" style="color: var(--muted); font-size: 11px;">TOOL</label>
@@ -363,6 +385,103 @@ loadMetrics = async function() {
   await _originalLoadMetrics();
   if (autoTimer) await loadAudit();
 };
+
+// === Creative review ===
+const creativeStatusSelect = $('creative-status');
+const creativeLimit = $('creative-limit');
+const storedCreativeStatus = localStorage.getItem('purrsonality-creative-status');
+if (storedCreativeStatus !== null) creativeStatusSelect.value = storedCreativeStatus;
+
+function setCreativeStatusLine(text, kind) {
+  const el = $('creative-status-line');
+  el.textContent = text;
+  el.className = 'status-line' + (kind === 'error' ? ' error' : '');
+}
+
+async function loadCreatives() {
+  const token = tokenInput.value.trim();
+  if (!token) { setCreativeStatusLine('Token required.', 'error'); return; }
+  const params = new URLSearchParams();
+  if (creativeStatusSelect.value) params.set('status', creativeStatusSelect.value);
+  if (creativeLimit.value) params.set('limit', creativeLimit.value);
+  try {
+    const res = await fetch('/api/creatives?' + params, { headers: { 'Authorization': 'Bearer ' + token } });
+    if (res.status === 401) { setCreativeStatusLine('Unauthorized', 'error'); return; }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    renderCreatives(j.creatives ?? []);
+    setCreativeStatusLine('loaded ' + (j.creatives?.length ?? 0) + ' @ ' + new Date().toLocaleTimeString());
+  } catch (err) {
+    setCreativeStatusLine('Failed: ' + err.message, 'error');
+  }
+}
+
+function renderCreatives(rows) {
+  const tbody = $('creative-table').querySelector('tbody');
+  if (rows.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">no creatives in this status</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const ts = new Date(r.submitted_at).toLocaleString();
+    const fmt = (r.format_id && r.format_id.id) ? r.format_id.id : '—';
+    const acct = r.account_id_hash ?? '—';
+    const statusColor = r.status === 'approved' ? 'var(--ok)'
+                      : r.status === 'rejected' ? 'var(--err)'
+                      : r.status === 'pending_review' ? 'var(--warn)' : 'var(--muted)';
+    const note = r.review_note ? escapeHtml(r.review_note) : '—';
+    const actions = r.status === 'pending_review'
+      ? `<button class="creative-approve" data-id="${escapeHtml(r.creative_id)}" style="font-size: 11px; padding: 3px 8px;">Approve</button>
+         <button class="creative-reject" data-id="${escapeHtml(r.creative_id)}" style="font-size: 11px; padding: 3px 8px; background: transparent; border: 1px solid var(--err); color: var(--err);">Reject</button>`
+      : '—';
+    return `<tr>
+      <td style="font-size: 11px;">${escapeHtml(ts)}</td>
+      <td style="font-family: Menlo, monospace; font-size: 11px;">${escapeHtml(r.creative_id)}</td>
+      <td style="font-size: 11px;">${escapeHtml(fmt)}</td>
+      <td style="font-family: Menlo, monospace; font-size: 11px;">${escapeHtml(acct)}</td>
+      <td style="color: ${statusColor}; font-weight: 600; font-size: 11px;">${escapeHtml(r.status)}</td>
+      <td style="font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${note}</td>
+      <td>${actions}</td>
+    </tr>`;
+  }).join('');
+
+  // Wire approve/reject buttons
+  tbody.querySelectorAll('.creative-approve').forEach(b => b.addEventListener('click', () => reviewCreative(b.dataset.id, 'approve')));
+  tbody.querySelectorAll('.creative-reject').forEach(b => b.addEventListener('click', () => reviewCreative(b.dataset.id, 'reject')));
+}
+
+async function reviewCreative(id, action) {
+  const token = tokenInput.value.trim();
+  if (!token) return;
+  let note = null;
+  if (action === 'reject') {
+    note = prompt('Reject reason (required):');
+    if (!note) return;
+  } else {
+    note = prompt('Optional approval note (leave blank for none):') || null;
+  }
+  try {
+    const res = await fetch(`/api/creatives/${encodeURIComponent(id)}/${action}`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(note ? { note } : {}),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'unknown' }));
+      setCreativeStatusLine(`${action} failed: ${err.error}${err.message ? ' — ' + err.message : ''}`, 'error');
+      return;
+    }
+    await loadCreatives();
+  } catch (err) {
+    setCreativeStatusLine('Failed: ' + err.message, 'error');
+  }
+}
+
+creativeStatusSelect.addEventListener('change', () => {
+  localStorage.setItem('purrsonality-creative-status', creativeStatusSelect.value);
+  loadCreatives();
+});
+$('creative-load').addEventListener('click', loadCreatives);
 
 $('refresh').addEventListener('click', loadMetrics);
 $('auto').addEventListener('click', () => {
