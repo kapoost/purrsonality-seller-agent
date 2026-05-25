@@ -50,6 +50,22 @@ jobs:
             -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci-smoke","version":"1.0"}}}' > /dev/null
           echo "Seller agent up"
 
+      - name: Probe diagnostic (mirrors storyboard probe_api_key)
+        run: |
+          echo "--- GET /mcp via proxy with bad bearer ---"
+          curl -s -i -X GET http://127.0.0.1:3001/mcp \
+            -H "Authorization: Bearer wrong" -m 5 | head -20 || true
+          echo ""
+          echo "--- GET /mcp direct SDK (port 3101) ---"
+          curl -s -i -X GET http://127.0.0.1:3101/mcp \
+            -H "Authorization: Bearer wrong" -m 5 | head -20 || true
+          echo ""
+          echo "--- POST /mcp via proxy with bad bearer ---"
+          curl -s -i -X POST http://127.0.0.1:3001/mcp \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer wrong" \
+            -d '{}' -m 5 | head -20 || true
+
       - name: Run AdCP storyboard suite
         run: |
           bunx adcp storyboard run http://127.0.0.1:3001/mcp \

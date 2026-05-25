@@ -90,6 +90,18 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
 
       try {
         const upstream = await fetch(target, fetchInit);
+        // Diagnostic: log proxy forwards while we stabilise the A2A discovery
+        // surface. CI storyboard probe_api_key is dropping content-type that
+        // works fine in local smoke — need visibility into what upstream
+        // actually returns. Strip after baseline holds for one CI cycle.
+        if (process.env.NODE_ENV !== 'production') {
+          log.info('proxy_forward', {
+            method: req.method,
+            path: url.pathname,
+            status: upstream.status,
+            upstream_content_type: upstream.headers.get('content-type'),
+          });
+        }
         // Pass upstream response straight through — preserves chunked encoding,
         // SSE events, error bodies, everything.
         return new Response(upstream.body, {
@@ -100,6 +112,8 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
       } catch (err) {
         log.error('proxy_upstream_failed', {
           target,
+          method: req.method,
+          path: url.pathname,
           error: (err as Error).message?.slice(0, 200),
         });
         return Response.json(
