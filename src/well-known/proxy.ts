@@ -71,14 +71,25 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
       fwdHeaders.delete('connection');
       fwdHeaders.delete('content-length');
 
+      // Only forward a request body for methods that semantically carry one.
+      // Passing `body: req.body` on GET/HEAD/OPTIONS to fetch() with
+      // `duplex: 'half'` was making the upstream Node http.Server return
+      // a body without a proper content-type — security_baseline/probe_api_key
+      // probes a GET and asserts JSON content-type, so it failed in CI
+      // even though the auth path (POST /mcp) was fine.
+      const methodHasBody = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+      const fetchInit: RequestInit = {
+        method: req.method,
+        headers: fwdHeaders,
+      };
+      if (methodHasBody) {
+        fetchInit.body = req.body;
+        // @ts-expect-error Bun-specific: duplex required when streaming a request body
+        fetchInit.duplex = 'half';
+      }
+
       try {
-        const upstream = await fetch(target, {
-          method: req.method,
-          headers: fwdHeaders,
-          body: req.body,
-          // @ts-expect-error Bun-specific: duplex required when streaming a request body
-          duplex: 'half',
-        });
+        const upstream = await fetch(target, fetchInit);
         // Pass upstream response straight through — preserves chunked encoding,
         // SSE events, error bodies, everything.
         return new Response(upstream.body, {
