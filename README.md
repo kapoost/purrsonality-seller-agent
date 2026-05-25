@@ -87,10 +87,13 @@ src/
 └── upstream/           Pinned upstream SDK types we depend on
 ```
 
-Two ports run side by side:
+Three ports run side by side:
 
-- `PORT` (default 3001) — public MCP endpoint, exposed via Fly `http_service`
+- `PORT` (default 3001) — public Bun.serve proxy: serves `/.well-known/agent.json` (A2A Agent Card discovery), `/.well-known/healthz`, and forwards everything else to the SDK on `PORT + 100`. Exposed via Fly `http_service`.
+- `PORT + 100` (default 3101) — SDK's `serve()` MCP endpoint with auth (internal only — never exposed externally).
 - `ADMIN_PORT` (default `PORT + 1`) — internal-only admin dashboard, **not** exposed externally on Fly. Reach it via `flyctl proxy 8081:8081 -a <app>`.
+
+The proxy lets us advertise an A2A Agent Card on the same origin without forking the SDK — the SDK's `serve()` only owns `/mcp` and `/.well-known/oauth-protected-resource/mcp`. Everything else needs an outer router.
 
 ---
 

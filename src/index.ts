@@ -8,6 +8,8 @@ import { startHeartbeat } from './observability/heartbeat.ts';
 import { startMetricsFlusher } from './observability/metrics-store.ts';
 import { platform } from './platform.ts';
 import { idempotencyStore, mediaBuyStore, stateStore, taskRegistry } from './stores/index.ts';
+import { buildAgentCard } from './well-known/agent-card.ts';
+import { startWellKnownProxy } from './well-known/proxy.ts';
 
 const env = loadEnv();
 await runMigrations();
@@ -21,6 +23,12 @@ startAdminServer({
   databaseBackend: env.DATABASE_URL ? 'postgres' : 'in-memory',
   nodeEnv: env.NODE_ENV,
 });
+
+// The SDK's `serve()` is a self-contained http.Server that only answers
+// /mcp and /.well-known/oauth-protected-resource/mcp. To advertise an A2A
+// Agent Card on the same origin we run the SDK on an internal port and
+// front it with a Bun.serve proxy on env.PORT (see src/well-known/proxy.ts).
+const sdkPort = env.PORT + 100;
 
 serve(
   ({ taskStore }) =>
@@ -42,7 +50,7 @@ serve(
       complyTest,
     }),
   {
-    port: env.PORT,
+    port: sdkPort,
     authenticate: verifyApiKey({
       keys: {
         [env.ADCP_AUTH_TOKEN]: { principal: 'purrsonality-dev' },
@@ -56,10 +64,20 @@ serve(
   },
 );
 
+startWellKnownProxy({
+  publicPort: env.PORT,
+  sdkPort,
+  agentCard: buildAgentCard({
+    agentUrl: `${env.PUBLIC_BASE_URL}/mcp`,
+    version: '0.0.1',
+  }),
+});
+
 log.info('startup', {
   agent: 'purrsonality-seller',
   version: '0.0.1',
   listening_on: `${env.PUBLIC_BASE_URL}/mcp`,
+  agent_card: `${env.PUBLIC_BASE_URL}/.well-known/agent.json`,
   specialisms: ['sales-non-guaranteed'],
   database: env.DATABASE_URL ? 'postgres' : 'in-memory',
   node_env: env.NODE_ENV,
