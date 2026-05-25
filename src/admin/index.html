@@ -112,12 +112,11 @@
   </div>
 
   <div class="panel">
-    <h2>Creative review</h2>
+    <h2>Creative review queue</h2>
     <div class="toolbar" style="margin-bottom: 12px;">
       <label for="creative-status" style="color: var(--muted); font-size: 11px;">STATUS</label>
       <select id="creative-status">
         <option value="pending_review" selected>pending_review</option>
-        <option value="approved">approved</option>
         <option value="rejected">rejected</option>
         <option value="archived">archived</option>
         <option value="">all</option>
@@ -130,6 +129,20 @@
     <table id="creative-table">
       <thead><tr><th>Submitted</th><th>Creative ID</th><th>Format</th><th>Account</th><th>Status</th><th>Note</th><th>Actions</th></tr></thead>
       <tbody><tr><td colspan="7" class="empty">click Reload to fetch creatives</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>Recently approved <span style="color: var(--muted); font-weight: normal; text-transform: none; letter-spacing: 0;">(sorted by submitted desc)</span></h2>
+    <div class="toolbar" style="margin-bottom: 12px;">
+      <label for="approved-limit" style="color: var(--muted); font-size: 11px;">LIMIT</label>
+      <input id="approved-limit" type="number" min="1" max="500" value="20" style="width: 80px;">
+      <button id="approved-load" class="ghost">Reload</button>
+      <span class="status-line" id="approved-status-line">—</span>
+    </div>
+    <table id="approved-table">
+      <thead><tr><th>Submitted</th><th>Creative ID</th><th>Format</th><th>Account</th><th>Status</th><th>Note</th><th>Reviewed</th></tr></thead>
+      <tbody><tr><td colspan="7" class="empty">click Reload to fetch approved creatives</td></tr></tbody>
     </table>
   </div>
 
@@ -409,17 +422,46 @@ async function loadCreatives() {
     if (res.status === 401) { setCreativeStatusLine('Unauthorized', 'error'); return; }
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const j = await res.json();
-    renderCreatives(j.creatives ?? []);
+    renderCreativesQueue(j.creatives ?? []);
     setCreativeStatusLine('loaded ' + (j.creatives?.length ?? 0) + ' @ ' + new Date().toLocaleTimeString());
   } catch (err) {
     setCreativeStatusLine('Failed: ' + err.message, 'error');
   }
 }
 
-function renderCreatives(rows) {
-  const tbody = $('creative-table').querySelector('tbody');
+const approvedLimit = $('approved-limit');
+function setApprovedStatusLine(text, kind) {
+  const el = $('approved-status-line');
+  el.textContent = text;
+  el.className = 'status-line' + (kind === 'error' ? ' error' : '');
+}
+async function loadApproved() {
+  const token = tokenInput.value.trim();
+  if (!token) { setApprovedStatusLine('Token required.', 'error'); return; }
+  const params = new URLSearchParams({ status: 'approved' });
+  if (approvedLimit.value) params.set('limit', approvedLimit.value);
+  try {
+    const res = await fetch('/api/creatives?' + params, { headers: { 'Authorization': 'Bearer ' + token } });
+    if (res.status === 401) { setApprovedStatusLine('Unauthorized', 'error'); return; }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    renderApprovedList(j.creatives ?? []);
+    setApprovedStatusLine('loaded ' + (j.creatives?.length ?? 0) + ' @ ' + new Date().toLocaleTimeString());
+  } catch (err) {
+    setApprovedStatusLine('Failed: ' + err.message, 'error');
+  }
+}
+$('approved-load').addEventListener('click', loadApproved);
+
+// After approve/reject the approved list should refresh too
+const _originalReviewCreative = reviewCreative;
+
+function renderCreatives(rows, opts) {
+  // opts: { tbody, withActions, lastColLabel, lastColRender, idPrefix, emptyText }
+  const tbody = opts.tbody;
+  const colspan = 7;
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">no creatives in this status</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="${colspan}" class="empty">${opts.emptyText ?? 'no creatives'}</td></tr>`;
     return;
   }
   tbody.innerHTML = rows.map((r, idx) => {
@@ -430,31 +472,28 @@ function renderCreatives(rows) {
                       : r.status === 'rejected' ? 'var(--err)'
                       : r.status === 'pending_review' ? 'var(--warn)' : 'var(--muted)';
     const note = r.review_note ? escapeHtml(r.review_note) : '—';
-    const actions = r.status === 'pending_review'
-      ? `<button class="creative-approve" data-id="${escapeHtml(r.creative_id)}" style="font-size: 11px; padding: 3px 8px;">Approve</button>
-         <button class="creative-reject" data-id="${escapeHtml(r.creative_id)}" style="font-size: 11px; padding: 3px 8px; background: transparent; border: 1px solid var(--err); color: var(--err);">Reject</button>`
-      : '—';
-    return `<tr class="creative-row" data-row-idx="${idx}" style="cursor: pointer;">
-      <td style="font-size: 11px;"><span class="creative-toggle" style="color: var(--muted); font-size: 10px; margin-right: 4px;">▸</span>${escapeHtml(ts)}</td>
+    const lastCol = opts.lastColRender(r);
+    return `<tr class="${opts.idPrefix}-row" data-row-idx="${idx}" style="cursor: pointer;">
+      <td style="font-size: 11px;"><span class="${opts.idPrefix}-toggle" style="color: var(--muted); font-size: 10px; margin-right: 4px;">▸</span>${escapeHtml(ts)}</td>
       <td style="font-family: Menlo, monospace; font-size: 11px;">${escapeHtml(r.creative_id)}</td>
       <td style="font-size: 11px;">${escapeHtml(fmt)}</td>
       <td style="font-family: Menlo, monospace; font-size: 11px;">${escapeHtml(acct)}</td>
       <td style="color: ${statusColor}; font-weight: 600; font-size: 11px;">${escapeHtml(r.status)}</td>
       <td style="font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${note}</td>
-      <td>${actions}</td>
+      <td>${lastCol}</td>
     </tr>
-    <tr class="creative-details" data-row-idx="${idx}" style="display: none; background: var(--bg);">
-      <td colspan="7" style="padding: 16px 20px;">${renderCreativeDetails(r)}</td>
+    <tr class="${opts.idPrefix}-details" data-row-idx="${idx}" style="display: none; background: var(--bg);">
+      <td colspan="${colspan}" style="padding: 16px 20px;">${renderCreativeDetails(r)}</td>
     </tr>`;
   }).join('');
 
-  // Wire toggle (click anywhere on main row except buttons)
-  tbody.querySelectorAll('.creative-row').forEach(row => {
+  // Toggle expand-row (click anywhere on main row except buttons)
+  tbody.querySelectorAll(`.${opts.idPrefix}-row`).forEach(row => {
     row.addEventListener('click', (e) => {
       if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
       const idx = row.dataset.rowIdx;
-      const details = tbody.querySelector(`.creative-details[data-row-idx="${idx}"]`);
-      const toggle = row.querySelector('.creative-toggle');
+      const details = tbody.querySelector(`.${opts.idPrefix}-details[data-row-idx="${idx}"]`);
+      const toggle = row.querySelector(`.${opts.idPrefix}-toggle`);
       if (details.style.display === 'none') {
         details.style.display = '';
         if (toggle) toggle.textContent = '▾';
@@ -465,15 +504,43 @@ function renderCreatives(rows) {
     });
   });
 
-  // Wire approve/reject buttons
-  tbody.querySelectorAll('.creative-approve').forEach(b => b.addEventListener('click', (e) => {
-    e.stopPropagation();
-    reviewCreative(b.dataset.id, 'approve');
-  }));
-  tbody.querySelectorAll('.creative-reject').forEach(b => b.addEventListener('click', (e) => {
-    e.stopPropagation();
-    reviewCreative(b.dataset.id, 'reject');
-  }));
+  if (opts.withActions) {
+    tbody.querySelectorAll('.creative-approve').forEach(b => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      reviewCreative(b.dataset.id, 'approve');
+    }));
+    tbody.querySelectorAll('.creative-reject').forEach(b => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      reviewCreative(b.dataset.id, 'reject');
+    }));
+  }
+}
+
+// Queue panel renderer — last column = action buttons for pending_review
+function renderCreativesQueue(rows) {
+  renderCreatives(rows, {
+    tbody: $('creative-table').querySelector('tbody'),
+    withActions: true,
+    idPrefix: 'creative',
+    emptyText: 'no creatives in this status',
+    lastColRender: (r) => r.status === 'pending_review'
+      ? `<button class="creative-approve" data-id="${escapeHtml(r.creative_id)}" style="font-size: 11px; padding: 3px 8px;">Approve</button>
+         <button class="creative-reject" data-id="${escapeHtml(r.creative_id)}" style="font-size: 11px; padding: 3px 8px; background: transparent; border: 1px solid var(--err); color: var(--err);">Reject</button>`
+      : '—',
+  });
+}
+
+// Approved panel renderer — last column = reviewed timestamp (read-only)
+function renderApprovedList(rows) {
+  renderCreatives(rows, {
+    tbody: $('approved-table').querySelector('tbody'),
+    withActions: false,
+    idPrefix: 'approved',
+    emptyText: 'no approved creatives yet',
+    lastColRender: (r) => r.reviewed_at
+      ? `<span style="font-size: 11px;">${escapeHtml(new Date(r.reviewed_at).toLocaleString())}</span>`
+      : '<span style="color: var(--muted)">—</span>',
+  });
 }
 
 function renderCreativeDetails(r) {
@@ -546,6 +613,8 @@ async function reviewCreative(id, action) {
       return;
     }
     await loadCreatives();
+    // Approved list reflects post-decision state too
+    if (action === 'approve') await loadApproved();
   } catch (err) {
     setCreativeStatusLine('Failed: ' + err.message, 'error');
   }
