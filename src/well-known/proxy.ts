@@ -72,20 +72,23 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
       fwdHeaders.delete('content-length');
 
       // Only forward a request body for methods that semantically carry one.
-      // Passing `body: req.body` on GET/HEAD/OPTIONS to fetch() with
-      // `duplex: 'half'` was making the upstream Node http.Server return
-      // a body without a proper content-type — security_baseline/probe_api_key
-      // probes a GET and asserts JSON content-type, so it failed in CI
-      // even though the auth path (POST /mcp) was fine.
+      // Read body into an ArrayBuffer up-front instead of forwarding the
+      // ReadableStream with `duplex: 'half'` — on Linux Bun fetch() the
+      // streamed forward to localhost was making Node http.Server reject
+      // the MCP initialize POST with 400 + null content-type, breaking
+      // security_baseline/probe_api_key in CI even though macOS smoke
+      // (same Bun 1.3.14) was fine. Buffering ≤ a few KB JSON-RPC bodies
+      // costs nothing here and makes the request fully formed.
       const methodHasBody = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
       const fetchInit: RequestInit = {
         method: req.method,
         headers: fwdHeaders,
       };
       if (methodHasBody) {
-        fetchInit.body = req.body;
-        // @ts-expect-error Bun-specific: duplex required when streaming a request body
-        fetchInit.duplex = 'half';
+        const bodyBuf = await req.arrayBuffer();
+        if (bodyBuf.byteLength > 0) {
+          fetchInit.body = bodyBuf;
+        }
       }
 
       try {
