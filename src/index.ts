@@ -51,6 +51,22 @@ serve(
     }),
   {
     port: sdkPort,
+    // Start the public proxy ONLY after the SDK is ready to receive forwarded
+    // requests. Without this, proxy boots first and any request that arrives
+    // during the ~50–200ms gap before SDK listen() returns gets a 502 from the
+    // proxy's fetch(). CI storyboard runner hits security_baseline probes
+    // immediately on connect, so the race was reliably reproducible there
+    // even though local smoke (with a manual readiness wait) never saw it.
+    onListening: () => {
+      startWellKnownProxy({
+        publicPort: env.PORT,
+        sdkPort,
+        agentCard: buildAgentCard({
+          agentUrl: `${env.PUBLIC_BASE_URL}/mcp`,
+          version: '0.0.1',
+        }),
+      });
+    },
     authenticate: verifyApiKey({
       keys: {
         [env.ADCP_AUTH_TOKEN]: { principal: 'purrsonality-dev' },
@@ -63,15 +79,6 @@ serve(
     }),
   },
 );
-
-startWellKnownProxy({
-  publicPort: env.PORT,
-  sdkPort,
-  agentCard: buildAgentCard({
-    agentUrl: `${env.PUBLIC_BASE_URL}/mcp`,
-    version: '0.0.1',
-  }),
-});
 
 log.info('startup', {
   agent: 'purrsonality-seller',
