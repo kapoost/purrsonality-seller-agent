@@ -422,7 +422,7 @@ function renderCreatives(rows) {
     tbody.innerHTML = '<tr><td colspan="7" class="empty">no creatives in this status</td></tr>';
     return;
   }
-  tbody.innerHTML = rows.map(r => {
+  tbody.innerHTML = rows.map((r, idx) => {
     const ts = new Date(r.submitted_at).toLocaleString();
     const fmt = (r.format_id && r.format_id.id) ? r.format_id.id : '—';
     const acct = r.account_id_hash ?? '—';
@@ -434,20 +434,94 @@ function renderCreatives(rows) {
       ? `<button class="creative-approve" data-id="${escapeHtml(r.creative_id)}" style="font-size: 11px; padding: 3px 8px;">Approve</button>
          <button class="creative-reject" data-id="${escapeHtml(r.creative_id)}" style="font-size: 11px; padding: 3px 8px; background: transparent; border: 1px solid var(--err); color: var(--err);">Reject</button>`
       : '—';
-    return `<tr>
-      <td style="font-size: 11px;">${escapeHtml(ts)}</td>
+    return `<tr class="creative-row" data-row-idx="${idx}" style="cursor: pointer;">
+      <td style="font-size: 11px;"><span class="creative-toggle" style="color: var(--muted); font-size: 10px; margin-right: 4px;">▸</span>${escapeHtml(ts)}</td>
       <td style="font-family: Menlo, monospace; font-size: 11px;">${escapeHtml(r.creative_id)}</td>
       <td style="font-size: 11px;">${escapeHtml(fmt)}</td>
       <td style="font-family: Menlo, monospace; font-size: 11px;">${escapeHtml(acct)}</td>
       <td style="color: ${statusColor}; font-weight: 600; font-size: 11px;">${escapeHtml(r.status)}</td>
       <td style="font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${note}</td>
       <td>${actions}</td>
+    </tr>
+    <tr class="creative-details" data-row-idx="${idx}" style="display: none; background: var(--bg);">
+      <td colspan="7" style="padding: 16px 20px;">${renderCreativeDetails(r)}</td>
     </tr>`;
   }).join('');
 
+  // Wire toggle (click anywhere on main row except buttons)
+  tbody.querySelectorAll('.creative-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+      const idx = row.dataset.rowIdx;
+      const details = tbody.querySelector(`.creative-details[data-row-idx="${idx}"]`);
+      const toggle = row.querySelector('.creative-toggle');
+      if (details.style.display === 'none') {
+        details.style.display = '';
+        if (toggle) toggle.textContent = '▾';
+      } else {
+        details.style.display = 'none';
+        if (toggle) toggle.textContent = '▸';
+      }
+    });
+  });
+
   // Wire approve/reject buttons
-  tbody.querySelectorAll('.creative-approve').forEach(b => b.addEventListener('click', () => reviewCreative(b.dataset.id, 'approve')));
-  tbody.querySelectorAll('.creative-reject').forEach(b => b.addEventListener('click', () => reviewCreative(b.dataset.id, 'reject')));
+  tbody.querySelectorAll('.creative-approve').forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    reviewCreative(b.dataset.id, 'approve');
+  }));
+  tbody.querySelectorAll('.creative-reject').forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    reviewCreative(b.dataset.id, 'reject');
+  }));
+}
+
+function renderCreativeDetails(r) {
+  const assets = r.assets ?? {};
+  const formatId = r.format_id ?? {};
+  const imageUrl = typeof assets.image === 'string' ? assets.image : null;
+  const clickUrl = typeof assets.click_url === 'string' ? assets.click_url : null;
+  const otherAssets = Object.fromEntries(
+    Object.entries(assets).filter(([k]) => k !== 'image' && k !== 'click_url'),
+  );
+
+  const meta = `
+    <div style="display: grid; grid-template-columns: 140px 1fr; gap: 6px 12px; font-size: 11px; margin-bottom: 12px;">
+      <div style="color: var(--muted);">Name</div><div>${r.name ? escapeHtml(r.name) : '<span style="color: var(--muted)">—</span>'}</div>
+      <div style="color: var(--muted);">Format</div>
+      <div style="font-family: Menlo, monospace;">
+        ${escapeHtml(formatId.id ?? '—')}
+        ${formatId.agent_url ? `<div style="color: var(--muted); font-size: 10px;">agent_url: ${escapeHtml(formatId.agent_url)}</div>` : ''}
+      </div>
+      <div style="color: var(--muted);">Submitted</div><div>${new Date(r.submitted_at).toLocaleString()}</div>
+      ${r.reviewed_at ? `<div style="color: var(--muted);">Reviewed</div><div>${new Date(r.reviewed_at).toLocaleString()}</div>` : ''}
+      ${r.review_note ? `<div style="color: var(--muted);">Review note</div><div>${escapeHtml(r.review_note)}</div>` : ''}
+    </div>`;
+
+  const preview = imageUrl
+    ? `<div style="margin-bottom: 12px;">
+         <div style="color: var(--muted); font-size: 11px; margin-bottom: 4px;">Image preview</div>
+         <img src="${escapeHtml(imageUrl)}" alt="creative" style="max-width: 320px; max-height: 250px; border: 1px solid var(--border); background: #fff;"
+              onerror="this.outerHTML='<div style=&quot;color: var(--err); font-size: 11px;&quot;>⚠ image URL did not load: <code>${escapeHtml(imageUrl)}</code></div>';">
+       </div>`
+    : '<div style="color: var(--muted); font-size: 11px; margin-bottom: 12px;">no <code>assets.image</code> field</div>';
+
+  const click = clickUrl
+    ? `<div style="margin-bottom: 12px; font-size: 11px;">
+         <span style="color: var(--muted);">Landing URL</span> →
+         <a href="${escapeHtml(clickUrl)}" target="_blank" rel="noopener noreferrer" style="color: var(--accent);">${escapeHtml(clickUrl)}</a>
+         <span style="color: var(--muted); font-size: 10px;"> (click to open w nowej karcie)</span>
+       </div>`
+    : '<div style="color: var(--muted); font-size: 11px; margin-bottom: 12px;">no <code>assets.click_url</code> field</div>';
+
+  const otherJson = Object.keys(otherAssets).length > 0
+    ? `<div>
+         <div style="color: var(--muted); font-size: 11px; margin-bottom: 4px;">Other assets</div>
+         <pre style="font-size: 11px; background: var(--bg); padding: 8px 12px; border: 1px solid var(--border); border-radius: 3px; overflow-x: auto; max-width: 100%;">${escapeHtml(JSON.stringify(otherAssets, null, 2))}</pre>
+       </div>`
+    : '';
+
+  return meta + preview + click + otherJson;
 }
 
 async function reviewCreative(id, action) {
