@@ -163,6 +163,66 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
         });
       }
 
+      // ── Phase B: live slot for purrsonality.pages.dev ───────────────
+      // Real-user serve endpoint embedded as an iframe on the quiz result
+      // page (see cats/src/components/AdSlot.astro). Picks the latest
+      // approved creative — operator's last Approve action automatically
+      // becomes the live banner.
+      //
+      // Differs from /preview by:
+      //   - frame-ancestors CSP allows purrsonality.pages.dev embed
+      //   - HTML is minimal (no chrome / metadata), pure banner
+      //   - impression event records media_buy_id='live-result-slot'
+      //   - 404 when no approved creative exists (operator hasn't reviewed any)
+      if (req.method === 'GET' && url.pathname === '/live/result-slot') {
+        const approved = await creativesStore.list({ status: 'approved', limit: 1 });
+        const creative = approved[0] ?? null;
+        if (!creative) {
+          return new Response('no approved creative available', {
+            status: 404,
+            headers: {
+              'Content-Security-Policy': "frame-ancestors 'self' https://purrsonality.pages.dev https://*.purrsonality.pages.dev",
+              'Cache-Control': 'no-store',
+            },
+          });
+        }
+        const assets = (creative.assets ?? {}) as Record<string, unknown>;
+        const imageUrl = pickAssetUrl(assets['image']);
+        const altText: string =
+          pickAssetField(assets['image'], 'alt_text') ??
+          creative.name ??
+          creative.creative_id ??
+          '';
+        const clickHref = `/click/live-result-slot?creative_id=${encodeURIComponent(creative.creative_id)}`;
+
+        await impressionsStore.record({
+          media_buy_id: 'live-result-slot',
+          creative_id: creative.creative_id,
+          event_type: 'impression',
+          account_id_hash: creative.account_id_hash,
+          user_agent: req.headers.get('user-agent'),
+          referrer: req.headers.get('referer'),
+        });
+
+        const html = `<!doctype html><html><head><meta charset="utf-8">
+<title>Purrsonality ad slot</title>
+<meta name="robots" content="noindex">
+<style>html,body{margin:0;padding:0;background:transparent;font:0/0 a;}a{display:block;}img{display:block;width:100%;height:auto;border:0;}</style>
+</head><body><a href="${escapeHtmlAttr(clickHref)}" target="_top" rel="noopener"><img src="${escapeHtmlAttr(imageUrl)}" alt="${escapeHtmlAttr(altText)}"></a></body></html>`;
+
+        return new Response(html, {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'no-store',
+            // Allow embedding on purrsonality.pages.dev + Cloudflare preview deployments
+            'Content-Security-Policy': "frame-ancestors 'self' https://purrsonality.pages.dev https://*.purrsonality.pages.dev",
+            'X-Robots-Tag': 'noindex',
+            'Referrer-Policy': 'no-referrer-when-downgrade',
+          },
+        });
+      }
+
       // Operator-facing preview — render approved creative without binding
       // to a media buy. Used by admin UI's "View live banner" link.
       const previewMatch = req.method === 'GET' && url.pathname.match(/^\/preview\/([^/]+)$/);

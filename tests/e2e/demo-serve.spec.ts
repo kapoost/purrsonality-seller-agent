@@ -19,6 +19,41 @@ test.describe('demo serve endpoints', () => {
     expect(res.status).toBe(404);
   });
 
+  test('/live/result-slot serves latest approved with embed-permissive CSP', async () => {
+    // Seed an approved creative (sandbox auto-approves)
+    const creativeId = `e2e_live_${Date.now()}`;
+    await mcpCall(
+      'sync_creatives',
+      {
+        idempotency_key: `idem-${creativeId}`,
+        account: { account_id: 'purrsonality' },
+        creatives: [{
+          creative_id: creativeId,
+          name: 'E2E live slot',
+          format_id: { id: 'display_300x250', agent_url: `${SERVER_URLS.publicBase}/mcp` },
+          assets: {
+            image: { asset_type: 'image', url: 'https://example.com/banner.png', width: 300, height: 250 },
+            click_url: { asset_type: 'url', url: 'https://example.com/landing' },
+          },
+        }],
+      },
+      TEST_SANDBOX_TOKEN,
+    );
+
+    const res = await fetch(`${SERVER_URLS.publicBase}/live/result-slot`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    // CSP must allow embed from purrsonality.pages.dev
+    const csp = res.headers.get('content-security-policy');
+    expect(csp).toContain('frame-ancestors');
+    expect(csp).toContain('purrsonality.pages.dev');
+    // Body has the banner image
+    const html = await res.text();
+    expect(html).toContain('<img');
+    expect(html).toContain('example.com/banner.png');
+    expect(html).toContain('/click/live-result-slot');
+  });
+
   test('/preview/<sandbox-auto-approved> serves HTML with image', async () => {
     // sandbox principal → sync_creatives auto-approves
     const creativeId = `e2e_preview_${Date.now()}`;
