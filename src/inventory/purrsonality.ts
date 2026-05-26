@@ -115,6 +115,42 @@ function detectAggressiveTerms(pkg: unknown): { aggressive: boolean; reason?: st
   return { aggressive: false };
 }
 
+/**
+ * Compute the set of `valid_actions` for a wire-level media-buy status.
+ * Spec enum: /schemas/3.0.12/enums/media-buy-valid-action.json.
+ *
+ * Pre-empt for adcp#5018 "compliance storyboards for media-buy available_actions"
+ * — replaces the prior coarse logic ("everything for non-terminal") with
+ * per-status semantics. Lists describe what the buyer CAN do via
+ * update_media_buy + sync_creatives + tools/call. `add_packages` is included
+ * for active buys because mockUpstream's createOrder supports patches that
+ * append packages (declaration matches actual capability).
+ */
+function validActionsForStatus(status: MediaBuyStatus): MediaBuyStatus extends never ? never : string[] {
+  switch (status) {
+    case 'pending_creatives':
+      // No creatives yet → no point pausing/resuming, but buyer MUST sync_creatives;
+      // can also adjust budget/packages or back out.
+      return ['sync_creatives', 'update_budget', 'update_packages', 'cancel'];
+    case 'pending_start':
+      // Approved, awaiting flight start. Buyer can tweak before serving.
+      return ['update_budget', 'update_packages', 'update_dates', 'sync_creatives', 'cancel'];
+    case 'active':
+      // Running. Buyer can pause, modify packages, push new creatives, abort.
+      return ['pause', 'update_budget', 'update_packages', 'add_packages', 'sync_creatives', 'cancel'];
+    case 'paused':
+      // Halted. Buyer can resume or modify, but not re-pause.
+      return ['resume', 'update_budget', 'update_packages', 'cancel'];
+    case 'completed':
+    case 'canceled':
+    case 'rejected':
+      // Terminal — no further mutations.
+      return [];
+    default:
+      return [];
+  }
+}
+
 function buildPackageResponse(orderId: string, productId: string, budget: number, pricingOptionId: string, hasCreatives: boolean): Package {
   return {
     package_id: `${orderId}_${productId}`,
@@ -319,6 +355,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     const successResponse: CreateMediaBuySuccess = {
       media_buy_id: order.order_id,
       status,
+      valid_actions: validActionsForStatus(status),
       confirmed_at: order.created_at,
       revision: 1,
       packages: packages.map((pkg) =>
@@ -408,9 +445,11 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     }
 
     const updated = mockUpstream.getOrder(buyId)!;
+    const newWireStatus = mockToWireStatus(updated.status);
     return {
       media_buy_id: buyId,
-      status: mockToWireStatus(updated.status),
+      status: newWireStatus,
+      valid_actions: validActionsForStatus(newWireStatus),
       revision: 2,
     } as unknown as UpdateMediaBuySuccess;
   },
@@ -543,10 +582,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         total_budget: o.budget,
         confirmed_at: o.created_at,
         revision: 1,
-        valid_actions:
-          o.status === 'completed' || o.status === 'canceled' || o.status === 'rejected'
-            ? []
-            : ['pause', 'resume', 'cancel', 'update_budget'],
+        valid_actions: validActionsForStatus(mockToWireStatus(o.status)),
         packages: o.product_ids.map((pid) => {
           const overlay = o.package_overlays?.[pid];
           return {
