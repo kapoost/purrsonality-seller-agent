@@ -42,6 +42,7 @@ import { createHash } from 'node:crypto';
 import { PUBLISHER } from '../config/purrsonality.ts';
 import { mockUpstream } from '../upstream/mock.ts';
 import { creativesStore } from '../stores/creatives.ts';
+import { impressionsStore } from '../stores/impressions.ts';
 import type { PurrAccountMeta } from '../handlers/accounts.ts';
 import type { InventoryAdapter } from './base.ts';
 import { simulateDelivery } from './sandbox/delivery-simulator.ts';
@@ -424,14 +425,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     const periodStart = r.start_date ? `${r.start_date}T00:00:00Z` : new Date(Date.now() - 86_400_000).toISOString();
     const periodEnd = r.end_date ? `${r.end_date}T23:59:59Z` : new Date().toISOString();
 
-    // Sandbox accounts get synthesised delivery so buyer agents can
-    // integration-test the full lifecycle without real impressions being
-    // served. Live accounts fall back to the upstream-recorded delivery
-    // (which is 0 until a real ad-server adapter is wired).
-    // `mode` is added at the AccountStore layer (handlers/accounts.ts) via
-    // a Partial<Account> cast — the SDK's base Account type doesn't declare
-    // it yet, hence the local widening cast here.
+    // Two delivery sources, merged per-buy:
+    //  1) Real impressions/clicks from impressions table (Phase A adserver).
+    //  2) Sandbox: synthesised pacing curve (delivery-simulator) — fallback
+    //     when no real serves landed yet so buyer agents still get plausible
+    //     numbers during integration tests.
+    //  3) Live: zeros when no real serves and not sandbox.
     const isSandbox = (ctx.account as { mode?: string } | undefined)?.mode === 'sandbox';
+    const realStats = await impressionsStore.statsForMediaBuys(ids);
 
     let aggImpressions = 0;
     let aggSpend = 0;
@@ -447,7 +448,17 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       let currency: string;
       let pacingIndex: number;
 
-      if (isSandbox && order) {
+      const real = realStats[id] ?? { impressions: 0, clicks: 0, last_at: null };
+      if (real.impressions > 0 || real.clicks > 0) {
+        // Real adserver traffic wins. Spend derives from impressions at the
+        // assumed floor CPM (we don't yet bill via packages.rate per impression).
+        const cpm = 1.5;
+        impressions = real.impressions;
+        clicks = real.clicks;
+        spend = +(impressions * cpm / 1000).toFixed(2);
+        currency = order?.currency ?? 'USD';
+        pacingIndex = 1.0;
+      } else if (isSandbox && order) {
         const sim = simulateDelivery({
           mediaBuyId: id,
           budget: order.budget,

@@ -530,16 +530,27 @@ function renderCreativesQueue(rows) {
   });
 }
 
-// Approved panel renderer — last column = reviewed timestamp (read-only)
+// Approved panel renderer — last column = reviewed timestamp + serve stats
 function renderApprovedList(rows) {
   renderCreatives(rows, {
     tbody: $('approved-table').querySelector('tbody'),
     withActions: false,
     idPrefix: 'approved',
     emptyText: 'no approved creatives yet',
-    lastColRender: (r) => r.reviewed_at
-      ? `<span style="font-size: 11px;">${escapeHtml(new Date(r.reviewed_at).toLocaleString())}</span>`
-      : '<span style="color: var(--muted)">—</span>',
+    lastColRender: (r) => {
+      const imp = r.stats?.impressions ?? 0;
+      const clk = r.stats?.clicks ?? 0;
+      const previewUrl = '/preview/' + encodeURIComponent(r.creative_id);
+      const reviewedStr = r.reviewed_at ? new Date(r.reviewed_at).toLocaleString() : '—';
+      const statsLine = imp > 0
+        ? `<div style="color: var(--ok); font-size: 10px;">served ${imp}× / ${clk} clicks</div>`
+        : `<div style="color: var(--muted); font-size: 10px;">not served yet</div>`;
+      return `<div style="font-size: 11px;">${escapeHtml(reviewedStr)}</div>
+        <div style="margin-top: 2px;">
+          <a href="${previewUrl}" target="_blank" rel="noopener" style="font-size: 10px; color: var(--accent);">View live banner ↗</a>
+        </div>
+        ${statsLine}`;
+    },
   });
 }
 
@@ -551,6 +562,12 @@ function renderCreativeDetails(r) {
   const otherAssets = Object.fromEntries(
     Object.entries(assets).filter(([k]) => k !== 'image' && k !== 'click_url'),
   );
+  const serveBlock = r.status === 'approved' ? `
+    <div style="margin-bottom: 12px; font-size: 11px;">
+      <span style="color: var(--muted);">Demo serve URL</span>
+      <a href="/preview/${encodeURIComponent(r.creative_id)}" target="_blank" rel="noopener" style="color: var(--accent); font-family: Menlo, monospace; font-size: 11px;">/preview/${escapeHtml(r.creative_id)} ↗</a>
+      ${r.stats ? `<span style="color: var(--muted); margin-left: 12px;">(served ${r.stats.impressions}× / ${r.stats.clicks} clicks)</span>` : ''}
+    </div>` : '';
 
   const meta = `
     <div style="display: grid; grid-template-columns: 140px 1fr; gap: 6px 12px; font-size: 11px; margin-bottom: 12px;">
@@ -588,7 +605,7 @@ function renderCreativeDetails(r) {
        </div>`
     : '';
 
-  return meta + preview + click + otherJson;
+  return meta + serveBlock + preview + click + otherJson;
 }
 
 async function reviewCreative(id, action) {

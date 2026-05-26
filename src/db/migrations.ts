@@ -45,6 +45,27 @@ const CREATIVES_MIGRATION = `
   CREATE INDEX IF NOT EXISTS creatives_account_idx ON creatives (account_id_hash);
 `;
 
+// Demo ad-server impression log — Phase A of "revive adserver" thread.
+// Every GET /serve/<media_buy_id> writes one row with event_type='impression';
+// every GET /click/<media_buy_id> writes one with event_type='click'. The
+// admin dashboard reads counts per media_buy here and getMediaBuyDelivery
+// prefers these real numbers over the synthetic delivery simulator when
+// any rows exist for the requested buy.
+const IMPRESSIONS_MIGRATION = `
+  CREATE TABLE IF NOT EXISTS impressions (
+    id BIGSERIAL PRIMARY KEY,
+    ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    media_buy_id TEXT NOT NULL,
+    creative_id TEXT,
+    event_type TEXT NOT NULL CHECK (event_type IN ('impression','click')),
+    account_id_hash TEXT,
+    user_agent TEXT,
+    referrer TEXT
+  );
+  CREATE INDEX IF NOT EXISTS impressions_media_buy_ts_idx ON impressions (media_buy_id, ts DESC);
+  CREATE INDEX IF NOT EXISTS impressions_event_ts_idx ON impressions (event_type, ts DESC);
+`;
+
 export async function runMigrations(): Promise<void> {
   const pool = getPool();
   if (!pool) {
@@ -57,5 +78,6 @@ export async function runMigrations(): Promise<void> {
   await pool.query(REPLAY_CACHE_MIGRATION);
   await pool.query(METRICS_EVENTS_MIGRATION);
   await pool.query(CREATIVES_MIGRATION);
+  await pool.query(IMPRESSIONS_MIGRATION);
   console.log('[db] Migrations complete.');
 }

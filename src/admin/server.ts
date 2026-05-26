@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { metrics } from '../observability/metrics.ts';
 import { queryMetrics, queryAuditEvents } from '../observability/metrics-store.ts';
 import { creativesStore, type CreativeStatus } from '../stores/creatives.ts';
+import { impressionsStore } from '../stores/impressions.ts';
 import { getPool } from '../db/pool.ts';
 import { log } from '../observability/logger.ts';
 
@@ -181,7 +182,16 @@ export function startAdminServer(cfg: AdminConfig): void {
               ...(status && { status }),
               limit,
             });
-            return Response.json({ creatives: rows }, { headers: corsHeaders });
+            // Enrich with per-creative impression/click stats (Phase A adserver).
+            // Cheap: one extra COUNT query for the whole page.
+            const stats = await impressionsStore.statsForCreatives(
+              rows.map((r) => r.creative_id),
+            );
+            const enriched = rows.map((r) => ({
+              ...r,
+              stats: stats[r.creative_id] ?? { impressions: 0, clicks: 0, last_at: null },
+            }));
+            return Response.json({ creatives: enriched }, { headers: corsHeaders });
           } catch (err) {
             return Response.json(
               { error: 'query_failed', message: (err as Error).message?.slice(0, 200) },

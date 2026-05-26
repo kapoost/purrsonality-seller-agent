@@ -20,6 +20,9 @@
 // not inspect Authorization headers.
 
 import { log } from '../observability/logger.ts';
+import { creativesStore } from '../stores/creatives.ts';
+import { impressionsStore } from '../stores/impressions.ts';
+import { mockUpstream } from '../upstream/mock.ts';
 
 interface ProxyOptions {
   publicPort: number;
@@ -28,6 +31,16 @@ interface ProxyOptions {
 }
 
 let server: ReturnType<typeof Bun.serve> | null = null;
+
+function escapeHtmlAttr(s: string | undefined | null): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => {
+    if (c === '&') return '&amp;';
+    if (c === '<') return '&lt;';
+    if (c === '>') return '&gt;';
+    if (c === '"') return '&quot;';
+    return '&#39;';
+  });
+}
 
 export function startWellKnownProxy(opts: ProxyOptions): void {
   if (server) return;
@@ -57,6 +70,133 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           { ok: true, uptime_ms: Date.now() - startedAt },
           { headers: { 'Cache-Control': 'no-store' } },
         );
+      }
+
+      // ── Demo ad-server routes (Phase A) ────────────────────────────────
+      // PUBLIC — no auth. Anyone with a media_buy_id can hit /serve to
+      // render the approved creative, /click to redirect via the landing.
+      // Each hit writes one row to impressions table for delivery accounting.
+
+      const serveMatch = req.method === 'GET' && url.pathname.match(/^\/serve\/([^/]+)$/);
+      if (serveMatch) {
+        const mediaBuyId = decodeURIComponent(serveMatch[1]!);
+        const order = mockUpstream.getOrder(mediaBuyId);
+        if (!order) {
+          return new Response('media buy not found', { status: 404 });
+        }
+        // Pick the latest approved creative submitted by the same buyer.
+        // Buyer can force a specific creative via ?creative_id=X.
+        const requestedCreativeId = url.searchParams.get('creative_id');
+        let creative;
+        if (requestedCreativeId) {
+          creative = await creativesStore.get(requestedCreativeId);
+          if (!creative || creative.status !== 'approved') {
+            return new Response('creative not approved', { status: 404 });
+          }
+        } else {
+          // account_id_hash on the order side is not directly stored; for the
+          // demo we just pull the most-recently approved creative regardless
+          // of buyer (the order owns the media_buy_id, the buyer chose the
+          // creative_id when they synced). Improve by stamping creative_id
+          // on package_responses when create_media_buy fires — out of scope
+          // for Phase A.
+          const approved = await creativesStore.list({ status: 'approved', limit: 1 });
+          creative = approved[0] ?? null;
+          if (!creative) {
+            return new Response('no approved creative available', { status: 404 });
+          }
+        }
+        const assets = (creative.assets ?? {}) as { image?: string; click_url?: string; alt_text?: string };
+        const imageUrl = assets.image ?? '';
+        const altText = assets.alt_text ?? creative.name ?? creative.creative_id;
+        const clickHref = `/click/${encodeURIComponent(mediaBuyId)}?creative_id=${encodeURIComponent(creative.creative_id)}`;
+
+        await impressionsStore.record({
+          media_buy_id: mediaBuyId,
+          creative_id: creative.creative_id,
+          event_type: 'impression',
+          account_id_hash: creative.account_id_hash,
+          user_agent: req.headers.get('user-agent'),
+          referrer: req.headers.get('referer'),
+        });
+
+        const html = `<!doctype html><html><head><meta charset="utf-8">
+<title>${escapeHtmlAttr(creative.name ?? creative.creative_id)}</title>
+<style>html,body{margin:0;padding:0;background:transparent;}a{display:inline-block;}img{display:block;max-width:100%;border:0;}</style>
+</head><body><a href="${escapeHtmlAttr(clickHref)}" target="_top" rel="noopener"><img src="${escapeHtmlAttr(imageUrl)}" alt="${escapeHtmlAttr(altText)}"></a></body></html>`;
+
+        return new Response(html, {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'no-store',
+            'X-Robots-Tag': 'noindex',
+          },
+        });
+      }
+
+      // Operator-facing preview — render approved creative without binding
+      // to a media buy. Used by admin UI's "View live banner" link.
+      const previewMatch = req.method === 'GET' && url.pathname.match(/^\/preview\/([^/]+)$/);
+      if (previewMatch) {
+        const creativeId = decodeURIComponent(previewMatch[1]!);
+        const creative = await creativesStore.get(creativeId);
+        if (!creative || creative.status !== 'approved') {
+          return new Response('creative not approved', { status: 404 });
+        }
+        const assets = (creative.assets ?? {}) as { image?: string; click_url?: string; alt_text?: string };
+        const imageUrl = assets.image ?? '';
+        const altText = assets.alt_text ?? creative.name ?? creative.creative_id;
+        const clickHref = `/click/preview?creative_id=${encodeURIComponent(creative.creative_id)}`;
+
+        await impressionsStore.record({
+          media_buy_id: 'preview',
+          creative_id: creative.creative_id,
+          event_type: 'impression',
+          account_id_hash: creative.account_id_hash,
+          user_agent: req.headers.get('user-agent'),
+          referrer: req.headers.get('referer'),
+        });
+
+        const html = `<!doctype html><html><head><meta charset="utf-8">
+<title>Preview — ${escapeHtmlAttr(creative.name ?? creative.creative_id)}</title>
+<style>html,body{margin:0;padding:0;background:#f5f5f5;font-family:system-ui,sans-serif;}
+.wrap{padding:16px;}
+.meta{font-size:11px;color:#666;margin-top:8px;}
+a{display:inline-block;text-decoration:none;}
+img{display:block;border:1px solid #ddd;background:#fff;}</style>
+</head><body><div class="wrap">
+<a href="${escapeHtmlAttr(clickHref)}" target="_top" rel="noopener"><img src="${escapeHtmlAttr(imageUrl)}" alt="${escapeHtmlAttr(altText)}"></a>
+<div class="meta">creative_id: ${escapeHtmlAttr(creative.creative_id)} · format: ${escapeHtmlAttr((creative.format_id as { id?: string }).id ?? '?')} · click → ${escapeHtmlAttr(assets.click_url ?? '(no click_url)')}</div>
+</div></body></html>`;
+
+        return new Response(html, {
+          status: 200,
+          headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+        });
+      }
+
+      const clickMatch = req.method === 'GET' && url.pathname.match(/^\/click\/([^/]+)$/);
+      if (clickMatch) {
+        const mediaBuyId = decodeURIComponent(clickMatch[1]!);
+        const requestedCreativeId = url.searchParams.get('creative_id');
+        const creative = requestedCreativeId
+          ? await creativesStore.get(requestedCreativeId)
+          : (await creativesStore.list({ status: 'approved', limit: 1 }))[0] ?? null;
+        if (!creative) return new Response('creative not found', { status: 404 });
+        const clickUrl = (creative.assets as { click_url?: string } | null)?.click_url;
+        if (!clickUrl) return new Response('no click_url on creative', { status: 404 });
+
+        await impressionsStore.record({
+          media_buy_id: mediaBuyId,
+          creative_id: creative.creative_id,
+          event_type: 'click',
+          account_id_hash: creative.account_id_hash,
+          user_agent: req.headers.get('user-agent'),
+          referrer: req.headers.get('referer'),
+        });
+
+        return new Response(null, { status: 302, headers: { Location: clickUrl } });
       }
 
       // Everything else: forward to the SDK on the internal port.
