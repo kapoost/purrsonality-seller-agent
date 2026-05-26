@@ -32,6 +32,27 @@ interface ProxyOptions {
 
 let server: ReturnType<typeof Bun.serve> | null = null;
 
+/**
+ * Pull a URL out of an AdCP asset value. Schema 3.0.12 wraps assets as
+ * `{ asset_type: "image"|"url"|..., url: "...", ... }`; legacy fixtures may
+ * still store a raw string. Return whichever is found, or empty string.
+ */
+function pickAssetUrl(asset: unknown): string {
+  if (typeof asset === 'string') return asset;
+  if (asset && typeof asset === 'object' && typeof (asset as { url?: unknown }).url === 'string') {
+    return (asset as { url: string }).url;
+  }
+  return '';
+}
+
+function pickAssetField(asset: unknown, key: string): string | null {
+  if (asset && typeof asset === 'object') {
+    const v = (asset as Record<string, unknown>)[key];
+    if (typeof v === 'string') return v;
+  }
+  return null;
+}
+
 function escapeHtmlAttr(s: string | undefined | null): string {
   return String(s ?? '').replace(/[&<>"']/g, (c) => {
     if (c === '&') return '&amp;';
@@ -106,9 +127,16 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
             return new Response('no approved creative available', { status: 404 });
           }
         }
-        const assets = (creative.assets ?? {}) as { image?: string; click_url?: string; alt_text?: string };
-        const imageUrl = assets.image ?? '';
-        const altText = assets.alt_text ?? creative.name ?? creative.creative_id;
+        // AdCP 3.0.12: assets are typed objects { asset_type, url, ... }, not
+        // raw strings. Tolerate the legacy string shape for pre-3.0.12 data
+        // that may still live in seeded mockUpstream fixtures.
+        const assets = (creative.assets ?? {}) as Record<string, unknown>;
+        const imageUrl = pickAssetUrl(assets['image']);
+        const altText: string =
+          pickAssetField(assets['image'], 'alt_text') ??
+          creative.name ??
+          creative.creative_id ??
+          '';
         const clickHref = `/click/${encodeURIComponent(mediaBuyId)}?creative_id=${encodeURIComponent(creative.creative_id)}`;
 
         await impressionsStore.record({
@@ -144,9 +172,13 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
         if (!creative || creative.status !== 'approved') {
           return new Response('creative not approved', { status: 404 });
         }
-        const assets = (creative.assets ?? {}) as { image?: string; click_url?: string; alt_text?: string };
-        const imageUrl = assets.image ?? '';
-        const altText = assets.alt_text ?? creative.name ?? creative.creative_id;
+        const assets = (creative.assets ?? {}) as Record<string, unknown>;
+        const imageUrl = pickAssetUrl(assets['image']);
+        const altText: string =
+          pickAssetField(assets['image'], 'alt_text') ??
+          creative.name ??
+          creative.creative_id ??
+          '';
         const clickHref = `/click/preview?creative_id=${encodeURIComponent(creative.creative_id)}`;
 
         await impressionsStore.record({
@@ -167,7 +199,7 @@ a{display:inline-block;text-decoration:none;}
 img{display:block;border:1px solid #ddd;background:#fff;}</style>
 </head><body><div class="wrap">
 <a href="${escapeHtmlAttr(clickHref)}" target="_top" rel="noopener"><img src="${escapeHtmlAttr(imageUrl)}" alt="${escapeHtmlAttr(altText)}"></a>
-<div class="meta">creative_id: ${escapeHtmlAttr(creative.creative_id)} · format: ${escapeHtmlAttr((creative.format_id as { id?: string }).id ?? '?')} · click → ${escapeHtmlAttr(assets.click_url ?? '(no click_url)')}</div>
+<div class="meta">creative_id: ${escapeHtmlAttr(creative.creative_id)} · format: ${escapeHtmlAttr((creative.format_id as { id?: string }).id ?? '?')} · click → ${escapeHtmlAttr(pickAssetUrl(assets['click_url']) || '(no click_url)')}</div>
 </div></body></html>`;
 
         return new Response(html, {
@@ -184,7 +216,9 @@ img{display:block;border:1px solid #ddd;background:#fff;}</style>
           ? await creativesStore.get(requestedCreativeId)
           : (await creativesStore.list({ status: 'approved', limit: 1 }))[0] ?? null;
         if (!creative) return new Response('creative not found', { status: 404 });
-        const clickUrl = (creative.assets as { click_url?: string } | null)?.click_url;
+        const clickUrl = pickAssetUrl(
+          (creative.assets as Record<string, unknown> | null)?.['click_url'],
+        );
         if (!clickUrl) return new Response('no click_url on creative', { status: 404 });
 
         await impressionsStore.record({

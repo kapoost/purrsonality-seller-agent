@@ -557,8 +557,11 @@ function renderApprovedList(rows) {
 function renderCreativeDetails(r) {
   const assets = r.assets ?? {};
   const formatId = r.format_id ?? {};
-  const imageUrl = typeof assets.image === 'string' ? assets.image : null;
-  const clickUrl = typeof assets.click_url === 'string' ? assets.click_url : null;
+  // AdCP 3.0.12: assets are typed objects {asset_type, url, ...}; tolerate
+  // legacy raw-string fixtures by checking type before dereference.
+  const pickUrl = (v) => (typeof v === 'string' ? v : (v && typeof v === 'object' && typeof v.url === 'string' ? v.url : null));
+  const imageUrl = pickUrl(assets.image);
+  const clickUrl = pickUrl(assets.click_url);
   const otherAssets = Object.fromEntries(
     Object.entries(assets).filter(([k]) => k !== 'image' && k !== 'click_url'),
   );

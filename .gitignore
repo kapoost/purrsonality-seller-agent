@@ -8,3 +8,5 @@ spike/runtime-test.ts
 .DS_Store
 ADDIE-RESPONSE.md
 .claude/
+playwright-report/
+test-results/
