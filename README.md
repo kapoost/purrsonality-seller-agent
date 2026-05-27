@@ -142,7 +142,7 @@ The agent uses a sandbox-authority gate: `account.mode === 'sandbox'` is decided
 
 ## Compliance
 
-Storyboard suite (from the official AdCP test kit) runs on every push. The CI guard rejects any drop below the current baseline (`131 passed / 2 failed`). See `.github/workflows/ci.yml`.
+Storyboard suite (from the official AdCP test kit) runs on every push. The CI guard rejects any drop below the current baseline (`131 passed / 1 failed`). See `.github/workflows/ci.yml`.
 
 Known protocol gaps tracked upstream:
 
