@@ -5,6 +5,7 @@ const envSchema = z.object({
   ADMIN_PORT: z.coerce.number().int().positive().optional(),
   ADCP_AUTH_TOKEN: z.string().min(8),
   ADCP_TEST_TOKEN: z.string().min(8).optional(),
+  ADCP_ADDIE_TOKEN: z.string().min(8).optional(),
   ADCP_PRIVATE_JWK: z.string().optional(),
   ADCP_KEY_ID: z.string().optional(),
   PUBLIC_BASE_URL: z.string().url().default('http://127.0.0.1:3001'),
