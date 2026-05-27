@@ -208,14 +208,19 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       return base;
     });
 
-    const generateProposal = (forProposalId?: string, isCommitted = false) => {
-      const proposalId = forProposalId ?? `prop_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const generateProposal = (forProposalId?: string, isCommitted = false, suffix = '') => {
+      const proposalId =
+        forProposalId ??
+        `prop_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}${suffix}`;
       const evenPct = Math.floor(100 / products.length);
       const allocations = products.map((p, i) => ({
         product_id: p.product_id,
         allocation_percentage: i === 0 ? 100 - evenPct * (products.length - 1) : evenPct,
         pricing_option_id: p.pricing_options?.[0]?.pricing_option_id,
       }));
+      // Track every emitted proposal so subsequent refine/create can
+      // distinguish PROPOSAL_NOT_FOUND from a known proposal — PR #4942.
+      mockUpstream.emitProposal(proposalId);
       return {
         proposal_id: proposalId,
         name: `Purrsonality plan ${proposalId.slice(0, 12)}`,
@@ -229,13 +234,57 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     };
 
     if (r.buying_mode === 'brief' && r.brief && products.length > 0) {
+      // Two distinct proposals per brief — PR #4946 multi-finalize storyboard
+      // captures proposals[0] and proposals[1] from a single response to
+      // exercise both atomic-success and capability-gap branches. A single-
+      // proposal response would silently skip half the scenario.
       return {
         products,
-        proposals: [generateProposal()],
+        proposals: [generateProposal(undefined, false, '_a'), generateProposal(undefined, false, '_b')],
       } as unknown as GetProductsResponse;
     }
 
     if (r.buying_mode === 'refine' && Array.isArray(r.refine) && r.refine.length > 0 && products.length > 0) {
+      // refine[] finalize-exclusivity — PR #4946. Each entry is individually
+      // schema-valid; the array as a whole has business-rule constraints.
+      const finalizeEntries = r.refine.filter((e) => e.action === 'finalize');
+      const nonFinalizeEntries = r.refine.filter((e) => e.action !== 'finalize');
+      if (finalizeEntries.length > 0 && nonFinalizeEntries.length > 0) {
+        const idx = r.refine.findIndex((e) => e.action !== 'finalize');
+        throw new AdcpError('INVALID_REQUEST', {
+          message: 'refine[] containing action="finalize" must consist exclusively of proposal-scoped finalize entries',
+          field: `refine[${idx}]`,
+          recovery: 'correctable',
+        });
+      }
+      if (finalizeEntries.length >= 2) {
+        throw new AdcpError('MULTI_FINALIZE_UNSUPPORTED', {
+          message: 'this seller does not support atomic multi-proposal finalize; sequence individual finalize calls',
+          recovery: 'correctable',
+        });
+      }
+      for (let i = 0; i < r.refine.length; i++) {
+        const entry = r.refine[i];
+        if (!entry) continue;
+        if (entry.scope === 'proposal' && entry.proposal_id) {
+          const lookup = mockUpstream.lookupProposal(entry.proposal_id);
+          if (!lookup) {
+            throw new AdcpError('PROPOSAL_NOT_FOUND', {
+              message: `proposal not found: ${entry.proposal_id}`,
+              field: `refine[${i}].proposal_id`,
+              recovery: 'correctable',
+            });
+          }
+          if (lookup.expired) {
+            throw new AdcpError('PROPOSAL_EXPIRED', {
+              message: `proposal expired: ${entry.proposal_id}`,
+              field: `refine[${i}].proposal_id`,
+              recovery: 'correctable',
+            });
+          }
+        }
+      }
+
       const refinement_applied = r.refine.map((entry) => {
         if (entry.scope === 'proposal') {
           return {
@@ -277,6 +326,26 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     const packages = req.packages ?? [];
     if (packages.length === 0 && !req.proposal_id) {
       throw new AdcpError('INVALID_REQUEST', { message: 'packages[] or proposal_id is required' });
+    }
+
+    // Proposal canonical errors — PR #4942. Buyer SDKs branch on these to
+    // re-finalize vs restart discovery; generic NOT_FOUND would be ambiguous.
+    if (req.proposal_id) {
+      const lookup = mockUpstream.lookupProposal(req.proposal_id);
+      if (!lookup) {
+        throw new AdcpError('PROPOSAL_NOT_FOUND', {
+          message: `proposal not found: ${req.proposal_id}`,
+          field: 'proposal_id',
+          recovery: 'correctable',
+        });
+      }
+      if (lookup.expired) {
+        throw new AdcpError('PROPOSAL_EXPIRED', {
+          message: `proposal expired: ${req.proposal_id}`,
+          field: 'proposal_id',
+          recovery: 'correctable',
+        });
+      }
     }
 
     const rTop = req as { start_time?: string; end_time?: string; flight?: { start_time?: string; end_time?: string } };

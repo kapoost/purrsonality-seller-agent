@@ -40,6 +40,7 @@ const deliverySim = new Map<
 const seededProducts = new Map<string, PurrProductConfig>();
 const seededCreatives = new Map<string, Record<string, unknown>>();
 const seededFormats = new Map<string, Record<string, unknown>>();
+const proposalsMap = new Map<string, { issued_at: string; expires_at: string }>();
 
 export interface CreateMediaBuyDirective {
   arm: 'submitted' | 'input-required';
@@ -184,6 +185,28 @@ export const mockUpstream = {
       o.package_budgets = { ...(o.package_budgets ?? {}), ...package_budgets };
     }
     return o;
+  },
+
+  // Proposal registry — every proposal_id we emit in get_products is tracked
+  // here so refine/create flows can distinguish a known-but-expired proposal
+  // from one we never issued. The "expired-" prefix is a storyboard sentinel
+  // (PR #4942) for forcing PROPOSAL_EXPIRED without burning real TTL.
+  emitProposal(id: string, ttlMs: number = 24 * 3600 * 1000): void {
+    const now = Date.now();
+    proposalsMap.set(id, {
+      issued_at: new Date(now).toISOString(),
+      expires_at: new Date(now + ttlMs).toISOString(),
+    });
+  },
+
+  lookupProposal(id: string): { issued_at: string; expires_at: string; expired: boolean } | undefined {
+    if (id.startsWith('expired-')) {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      return { issued_at: past, expires_at: past, expired: true };
+    }
+    const p = proposalsMap.get(id);
+    if (!p) return undefined;
+    return { ...p, expired: new Date(p.expires_at).getTime() < Date.now() };
   },
 
   setPackageOverlay(orderId: string, productId: string, overlay: PackageOverlay): void {
