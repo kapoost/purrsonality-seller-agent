@@ -16,6 +16,14 @@ export const SIGNALS: readonly PurrSignal[] = [
   { id: 'purr_persona_tyrant',    name: 'Cat owner — assertive cat',       description: 'Result: dominant, defensive cat (The Tiny Tyrant).', type: 'behavioral' },
 ] as const;
 
+export interface ProductAllowedAction {
+  action: string;
+  modes: readonly string[];
+  sla?: { response_max?: string; completion_max?: string };
+  terms_ref?: string;
+  allowed_statuses?: readonly string[];
+}
+
 export interface PurrProductConfig {
   product_id: string;
   name: string;
@@ -28,6 +36,7 @@ export interface PurrProductConfig {
   currency: string;
   min_spend: number;
   estimated_impressions_per_month: number;
+  allowed_actions?: readonly ProductAllowedAction[];
 }
 
 export const PRODUCTS: readonly PurrProductConfig[] = [

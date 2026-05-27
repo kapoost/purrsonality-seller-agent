@@ -46,6 +46,12 @@ import { impressionsStore } from '../stores/impressions.ts';
 import type { PurrAccountMeta } from '../handlers/accounts.ts';
 import type { InventoryAdapter } from './base.ts';
 import { simulateDelivery } from './sandbox/delivery-simulator.ts';
+import {
+  detectAttemptedAction,
+  enforceAttemptedAction,
+  filterByStatus,
+  resolveBuyAvailableActions,
+} from './actions.ts';
 
 function hashAccountId(id: string | null | undefined): string | null {
   if (!id) return null;
@@ -169,8 +175,22 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       brief?: string;
       refine?: Array<{ scope?: string; proposal_id?: string; product_id?: string; action?: string }>;
     };
-    const products = mockUpstream.listProducts().map((p) =>
-      buildProduct({
+    // Seeded products are hoisted to `products[0]` ONLY when the brief
+    // names them — `product_id` with underscores rewritten as spaces is
+    // matched (case-insensitive) as a substring of the brief. This lets the
+    // available_actions storyboard (brief: "available actions display
+    // package") pick its seeded fixture without contaminating later
+    // scenarios that share a process and would otherwise inherit the
+    // `allowed_actions[]` surface through $context.product_id.
+    const briefLc = (r.brief ?? '').toLowerCase();
+    const raw = [...mockUpstream.listProducts()].sort((a, b) => {
+      const aHit = briefLc && briefLc.includes(a.product_id.replace(/_/g, ' ').toLowerCase());
+      const bHit = briefLc && briefLc.includes(b.product_id.replace(/_/g, ' ').toLowerCase());
+      if (aHit === bHit) return 0;
+      return aHit ? -1 : 1;
+    });
+    const products = raw.map((p) => {
+      const base = buildProduct({
         id: p.product_id,
         name: p.name,
         description: p.description,
@@ -181,8 +201,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         publisher_domain: PUBLISHER.adcp_publisher,
         channels: [p.channel],
         ctx_metadata: { ad_unit_ids: [...p.ad_unit_ids] },
-      }),
-    );
+      });
+      if (p.allowed_actions && p.allowed_actions.length > 0) {
+        (base as unknown as { allowed_actions: readonly unknown[] }).allowed_actions = p.allowed_actions;
+      }
+      return base;
+    });
 
     const generateProposal = (forProposalId?: string, isCommitted = false) => {
       const proposalId = forProposalId ?? `prop_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -286,6 +310,8 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     let currency = req.total_budget?.currency ?? 'USD';
     let hasAnyCreatives = false;
     const overlayMap = new Map<string, { property_list?: { agent_url: string; list_id: string }; collection_list?: { agent_url: string; list_id: string } }>();
+    const packageBudgets: Record<string, number> = {};
+    const resolvedProductConfigs: NonNullable<ReturnType<typeof mockUpstream.getProduct>>[] = [];
 
     for (const pkg of packages) {
       if (!pkg.product_id) {
@@ -301,6 +327,8 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       }
       totalBudget += pkg.budget;
       productIds.push(pkg.product_id);
+      packageBudgets[pkg.product_id] = pkg.budget;
+      resolvedProductConfigs.push(product);
 
       const pkgAny = pkg as {
         creatives?: unknown[];
@@ -343,7 +371,11 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       pacing: 'even',
       ...(flight?.start_time !== undefined && { flight_start: flight.start_time }),
       ...(flight?.end_time !== undefined && { flight_end: flight.end_time }),
+      ...(rTop.start_time !== undefined && { flight_start: rTop.start_time }),
+      ...(rTop.end_time !== undefined && { flight_end: rTop.end_time }),
       client_request_id: req.idempotency_key,
+      package_budgets: packageBudgets,
+      status: hasAnyCreatives ? 'confirmed' : 'pending_creatives',
     });
 
     for (const [productId, overlay] of overlayMap.entries()) {
@@ -351,11 +383,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     }
 
     const status: MediaBuyStatus = hasAnyCreatives ? 'active' : 'pending_creatives';
+    const allBuyActions = resolveBuyAvailableActions(resolvedProductConfigs);
+    const availableActions = filterByStatus(allBuyActions, status);
 
     const successResponse: CreateMediaBuySuccess = {
       media_buy_id: order.order_id,
       status,
       valid_actions: validActionsForStatus(status),
+      ...(availableActions.length > 0 && { available_actions: availableActions }),
       confirmed_at: order.created_at,
       revision: 1,
       packages: packages.map((pkg) =>
@@ -387,6 +422,8 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     const p = patch as {
       paused?: boolean;
       canceled?: true;
+      cancellation_reason?: string;
+      end_time?: string;
       packages?: Array<{ package_id?: string; paused?: boolean; budget?: number }>;
     };
 
@@ -401,6 +438,34 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     }
     if (existing.status === 'canceled' && (p.paused !== undefined || p.packages)) {
       throw new AdcpError('INVALID_STATE', { message: 'media buy is in a terminal state (canceled)' });
+    }
+
+    // AdCP 3.1 action-discovery: when the buy's products declare
+    // allowed_actions[], every mutation maps to a fine-grained action that
+    // MUST be present + in the right mode + in scope for the current status.
+    // Mismatches reject with ACTION_NOT_ALLOWED so buyers can branch on
+    // details.reason without re-deriving the seller's state machine.
+    const buyProductConfigs = existing.product_ids
+      .map((pid) => mockUpstream.getProduct(pid))
+      .filter((cfg): cfg is NonNullable<typeof cfg> => Boolean(cfg));
+    const buyAllActions = resolveBuyAvailableActions(buyProductConfigs);
+    const currentWireStatus = mockToWireStatus(existing.status);
+    if (buyAllActions.length > 0) {
+      const attempted = detectAttemptedAction(p as unknown as Record<string, unknown>, existing.package_budgets, buyId);
+      if (attempted) {
+        const result = enforceAttemptedAction(attempted.action, buyAllActions, currentWireStatus);
+        if (!result.ok) {
+          throw new AdcpError('ACTION_NOT_ALLOWED', {
+            message: `Action '${result.attempted_action}' is not currently available on this media buy (${result.reason})`,
+            recovery: result.recovery,
+            details: {
+              attempted_action: result.attempted_action,
+              reason: result.reason,
+              currently_available_actions: result.currently_available_actions,
+            },
+          });
+        }
+      }
     }
 
     if (p.packages) {
@@ -442,14 +507,43 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       mockUpstream.updateOrder(buyId, { status: 'paused' });
     } else if (p.paused === false) {
       mockUpstream.updateOrder(buyId, { status: 'confirmed' });
+    } else if (existing.status === 'pending_creatives') {
+      // Creative assignments unblock the buy from pending_creatives → active.
+      const hasCreativeAssignment = (p.packages ?? []).some((pkg) => {
+        const arr = (pkg as { creative_assignments?: unknown[] }).creative_assignments;
+        return Array.isArray(arr) && arr.length > 0;
+      });
+      if (hasCreativeAssignment) {
+        mockUpstream.updateOrder(buyId, { status: 'confirmed' });
+      }
+    }
+
+    if (typeof p.end_time === 'string') {
+      mockUpstream.updateOrder(buyId, { flight_end: p.end_time });
+    }
+
+    if (p.packages) {
+      const budgetPatch: Record<string, number> = {};
+      for (const pkgPatch of p.packages) {
+        if (typeof pkgPatch.budget !== 'number' || !pkgPatch.package_id) continue;
+        const productId = pkgPatch.package_id.startsWith(`${buyId}_`)
+          ? pkgPatch.package_id.slice(`${buyId}_`.length)
+          : pkgPatch.package_id;
+        budgetPatch[productId] = pkgPatch.budget;
+      }
+      if (Object.keys(budgetPatch).length > 0) {
+        mockUpstream.updateOrder(buyId, { package_budgets: budgetPatch });
+      }
     }
 
     const updated = mockUpstream.getOrder(buyId)!;
     const newWireStatus = mockToWireStatus(updated.status);
+    const postAvailableActions = filterByStatus(buyAllActions, newWireStatus);
     return {
       media_buy_id: buyId,
       status: newWireStatus,
       valid_actions: validActionsForStatus(newWireStatus),
+      ...(postAvailableActions.length > 0 && { available_actions: postAvailableActions }),
       revision: 2,
     } as unknown as UpdateMediaBuySuccess;
   },
@@ -575,32 +669,40 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     );
     return {
       pagination: { has_more: false, total_count: orders.length },
-      media_buys: orders.map((o) => ({
-        media_buy_id: o.order_id,
-        status: mockToWireStatus(o.status),
-        currency: o.currency,
-        total_budget: o.budget,
-        confirmed_at: o.created_at,
-        revision: 1,
-        valid_actions: validActionsForStatus(mockToWireStatus(o.status)),
-        packages: o.product_ids.map((pid) => {
-          const overlay = o.package_overlays?.[pid];
-          return {
-            package_id: `${o.order_id}_${pid}`,
-            product_id: pid,
-            budget: 0,
-            pricing_option_id: 'po_cpm_default',
-            pacing: 'even',
-            status: o.status === 'completed' || o.status === 'canceled' ? 'completed' : 'active',
-            ...(overlay && {
-              targeting_overlay: {
-                ...(overlay.property_list && { property_list: overlay.property_list }),
-                ...(overlay.collection_list && { collection_list: overlay.collection_list }),
-              },
-            }),
-          };
-        }),
-      })),
+      media_buys: orders.map((o) => {
+        const wireStatus = mockToWireStatus(o.status);
+        const productConfigs = o.product_ids
+          .map((pid) => mockUpstream.getProduct(pid))
+          .filter((p): p is NonNullable<typeof p> => Boolean(p));
+        const availableActions = filterByStatus(resolveBuyAvailableActions(productConfigs), wireStatus);
+        return {
+          media_buy_id: o.order_id,
+          status: wireStatus,
+          currency: o.currency,
+          total_budget: o.budget,
+          confirmed_at: o.created_at,
+          revision: 1,
+          valid_actions: validActionsForStatus(wireStatus),
+          ...(availableActions.length > 0 && { available_actions: availableActions }),
+          packages: o.product_ids.map((pid) => {
+            const overlay = o.package_overlays?.[pid];
+            return {
+              package_id: `${o.order_id}_${pid}`,
+              product_id: pid,
+              budget: o.package_budgets?.[pid] ?? 0,
+              pricing_option_id: 'po_cpm_default',
+              pacing: 'even',
+              status: o.status === 'completed' || o.status === 'canceled' ? 'completed' : 'active',
+              ...(overlay && {
+                targeting_overlay: {
+                  ...(overlay.property_list && { property_list: overlay.property_list }),
+                  ...(overlay.collection_list && { collection_list: overlay.collection_list }),
+                },
+              }),
+            };
+          }),
+        };
+      }),
     } as unknown as GetMediaBuysResponse;
   },
 

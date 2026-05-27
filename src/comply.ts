@@ -18,7 +18,36 @@ export const complyTest: ComplyControllerConfig = {
 
   seed: {
     product: async (params) => {
-      mockUpstream.seedProduct(params.product_id, params.fixture as Record<string, never>);
+      const fixture = (params.fixture ?? {}) as {
+        name?: string;
+        description?: string;
+        format_ids?: Array<{ id?: string } | string>;
+        allowed_actions?: ReadonlyArray<{
+          action: string;
+          modes: readonly string[];
+          sla?: { response_max?: string; completion_max?: string };
+          terms_ref?: string;
+          allowed_statuses?: readonly string[];
+        }>;
+      };
+      // Only keep format_ids that this seller actually surfaces in
+      // list_creative_formats; otherwise storyboards that cross-walk
+      // get_products → list_creative_formats trip on phantom IDs. Unknown
+      // fixture format_ids (e.g. "video_30s" from generic test kits) are
+      // dropped so the seeded product falls back to the publisher's default
+      // format set.
+      const knownFormats = new Set(['display_300x250', 'display_responsive']);
+      const format_ids = Array.isArray(fixture.format_ids)
+        ? fixture.format_ids
+            .map((f) => (typeof f === 'string' ? f : f?.id))
+            .filter((s): s is string => typeof s === 'string' && knownFormats.has(s))
+        : undefined;
+      mockUpstream.seedProduct(params.product_id, {
+        ...(fixture.name !== undefined && { name: fixture.name }),
+        ...(fixture.description !== undefined && { description: fixture.description }),
+        ...(format_ids && format_ids.length > 0 && { format_ids }),
+        ...(fixture.allowed_actions && { allowed_actions: fixture.allowed_actions }),
+      });
     },
     pricing_option: async (params) => {
       const fixture = params.fixture as { fixed_price?: number; floor_price?: number; currency?: string };

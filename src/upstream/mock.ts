@@ -1,4 +1,4 @@
-import { PRODUCTS, PUBLISHER, type PurrProductConfig } from '../config/purrsonality.ts';
+import { PRODUCTS, PUBLISHER, type PurrProductConfig, type ProductAllowedAction } from '../config/purrsonality.ts';
 
 export interface MockOrder {
   order_id: string;
@@ -14,6 +14,7 @@ export interface MockOrder {
   created_at: string;
   client_request_id?: string;
   package_overlays?: Record<string, PackageOverlay>;
+  package_budgets?: Record<string, number>;
 }
 
 export interface PackageOverlay {
@@ -65,20 +66,24 @@ export const mockUpstream = {
     return PRODUCTS.find((p) => p.product_id === id) ?? seededProducts.get(id);
   },
 
-  seedProduct(id: string, overrides?: Partial<PurrProductConfig>): PurrProductConfig {
+  seedProduct(id: string, overrides?: Partial<PurrProductConfig> & { allowed_actions?: readonly ProductAllowedAction[] }): PurrProductConfig {
     const existing = PRODUCTS[0]!;
+    const prior = seededProducts.get(id);
     const product: PurrProductConfig = {
       product_id: id,
-      name: overrides?.name ?? `Seeded ${id}`,
-      description: overrides?.description ?? `Test product seeded by compliance runner: ${id}`,
+      name: overrides?.name ?? prior?.name ?? `Seeded ${id}`,
+      description: overrides?.description ?? prior?.description ?? `Test product seeded by compliance runner: ${id}`,
       network_code: PUBLISHER.network_code,
-      channel: (overrides?.channel as 'display') ?? 'display',
-      format_ids: (overrides?.format_ids as readonly string[]) ?? existing.format_ids,
-      ad_unit_ids: (overrides?.ad_unit_ids as readonly string[]) ?? existing.ad_unit_ids,
-      min_cpm: overrides?.min_cpm ?? existing.min_cpm,
-      currency: overrides?.currency ?? existing.currency,
-      min_spend: overrides?.min_spend ?? existing.min_spend,
-      estimated_impressions_per_month: overrides?.estimated_impressions_per_month ?? existing.estimated_impressions_per_month,
+      channel: (overrides?.channel as 'display') ?? prior?.channel ?? 'display',
+      format_ids: (overrides?.format_ids as readonly string[]) ?? prior?.format_ids ?? existing.format_ids,
+      ad_unit_ids: (overrides?.ad_unit_ids as readonly string[]) ?? prior?.ad_unit_ids ?? existing.ad_unit_ids,
+      min_cpm: overrides?.min_cpm ?? prior?.min_cpm ?? existing.min_cpm,
+      currency: overrides?.currency ?? prior?.currency ?? existing.currency,
+      min_spend: overrides?.min_spend ?? prior?.min_spend ?? existing.min_spend,
+      estimated_impressions_per_month: overrides?.estimated_impressions_per_month ?? prior?.estimated_impressions_per_month ?? existing.estimated_impressions_per_month,
+      ...((overrides?.allowed_actions ?? prior?.allowed_actions) && {
+        allowed_actions: overrides?.allowed_actions ?? prior?.allowed_actions,
+      }),
     };
     seededProducts.set(id, product);
     return product;
@@ -125,6 +130,8 @@ export const mockUpstream = {
     flight_start?: string;
     flight_end?: string;
     client_request_id?: string;
+    package_budgets?: Record<string, number>;
+    status?: MockOrder['status'];
   }): MockOrder {
     if (args.client_request_id) {
       const existing = requestKey.get(args.client_request_id);
@@ -142,11 +149,12 @@ export const mockUpstream = {
       budget: args.budget,
       currency: args.currency,
       pacing: args.pacing ?? 'even',
-      status: 'confirmed',
+      status: args.status ?? 'confirmed',
       ...(args.flight_start !== undefined && { flight_start: args.flight_start }),
       ...(args.flight_end !== undefined && { flight_end: args.flight_end }),
       created_at: new Date().toISOString(),
       ...(args.client_request_id !== undefined && { client_request_id: args.client_request_id }),
+      ...(args.package_budgets && { package_budgets: { ...args.package_budgets } }),
     };
 
     orders.set(order.order_id, order);
@@ -162,10 +170,19 @@ export const mockUpstream = {
     return [...orders.values()].filter((o) => o.network_code === networkCode);
   },
 
-  updateOrder(id: string, patch: Partial<Pick<MockOrder, 'status' | 'budget' | 'pacing'>>): MockOrder | undefined {
+  updateOrder(
+    id: string,
+    patch: Partial<Pick<MockOrder, 'status' | 'budget' | 'pacing' | 'flight_end' | 'flight_start'>> & {
+      package_budgets?: Record<string, number>;
+    },
+  ): MockOrder | undefined {
     const o = orders.get(id);
     if (!o) return undefined;
-    Object.assign(o, patch);
+    const { package_budgets, ...rest } = patch;
+    Object.assign(o, rest);
+    if (package_budgets) {
+      o.package_budgets = { ...(o.package_budgets ?? {}), ...package_budgets };
+    }
     return o;
   },
 
