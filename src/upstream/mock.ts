@@ -29,6 +29,16 @@ export interface MockOrder {
   // both fields are echoed on the update response and on get_media_buys.
   canceled_by?: 'buyer' | 'seller' | 'system';
   canceled_at?: string;
+  // Seeded package overrides via comply_test_controller seed_media_buy.
+  // When present, get_media_buys returns these verbatim instead of
+  // synthesising packages from `product_ids` — supports legacy-fallback
+  // scenarios that seed custom package_id / budget per package.
+  seeded_packages?: ReadonlyArray<{
+    package_id?: string;
+    product_id?: string;
+    budget?: number;
+    context?: { buyer_ref?: string; correlation_id?: string };
+  }>;
 }
 
 export interface PackageOverlay {
@@ -259,6 +269,7 @@ export const mockUpstream = {
     currency?: string;
     status?: MockOrder['status'];
     legacy_packages?: Array<{ package_id: string; context?: { buyer_ref?: string; correlation_id?: string } }>;
+    packages?: MockOrder['seeded_packages'];
   }): MockOrder {
     const existing = orders.get(args.media_buy_id);
     const order: MockOrder = existing ?? {
@@ -271,11 +282,13 @@ export const mockUpstream = {
       pacing: 'even',
       status: args.status ?? 'confirmed',
       created_at: new Date().toISOString(),
+      ...(args.packages && args.packages.length > 0 && { seeded_packages: args.packages }),
     };
     if (args.status) order.status = args.status;
     if (args.legacy_packages && args.legacy_packages.length > 0) {
       order.legacy_packages = args.legacy_packages;
     }
+    if (args.packages && args.packages.length > 0) order.seeded_packages = args.packages;
     orders.set(args.media_buy_id, order);
     return order;
   },

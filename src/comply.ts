@@ -117,13 +117,21 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         // Legacy-shape packages (3.1 package_correlation_legacy_fallback) —
         // package_id + buyer_ref, no product_id. Runners that seed these
         // expect get_media_buys to emit them verbatim so buyers can correlate
-        // via context.buyer_ref alone.
-        packages?: Array<{
+        // via context.buyer_ref alone. Budget override flows through
+        // packageOverrides for fixtures that need to set per-package spend.
+        packages?: ReadonlyArray<{
           package_id?: string;
           product_id?: string;
+          budget?: number;
           context?: { buyer_ref?: string; correlation_id?: string };
         }>;
       };
+      const packageOverrides = (fixture.packages ?? []).map((p) => ({
+        ...(p.package_id !== undefined && { package_id: p.package_id }),
+        ...(p.product_id !== undefined && { product_id: p.product_id }),
+        ...(p.budget !== undefined && { budget: p.budget }),
+        ...(p.context && { context: p.context }),
+      }));
       const legacyPackages = (fixture.packages ?? [])
         .filter((p) => p.package_id && !p.product_id)
         .map((p) => ({
@@ -137,6 +145,7 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         product_ids: fixture.product_ids ?? [],
         budget: fixture.budget ?? 0,
         currency: fixture.currency ?? 'USD',
+        ...(packageOverrides.length > 0 && { packages: packageOverrides }),
         ...(fixture.status && { status: mockStatus(fixture.status) }),
         ...(legacyPackages.length > 0 && { legacy_packages: legacyPackages }),
       });
@@ -269,6 +278,8 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
           code: 'OVERSIGHT_DISCLOSURE_CARVEOUT_CLAIMED',
           severity: 'audit-worthy',
           recovery: 'informational',
+          field: 'provenance.embedded_provenance[0].claims.disclosure_required',
+          message: `Buyer claimed human_oversight='${oversight}' with disclosure_required:false; carve-out logged for audit replay.`,
           details: {
             agent_url: 'https://governance.encypher.seller.example',
             feature_id: 'ai_generated',

@@ -312,7 +312,6 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // proposal response would silently skip half the scenario.
       return {
         products,
-        cache_scope: 'public',
         proposals: [generateProposal(undefined, false, '_a'), generateProposal(undefined, false, '_b')],
         cache_scope: 'public' as const,
       } satisfies GetProductsPayload;
@@ -943,32 +942,42 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           // empty impairments[] until creative_status / upstream_unavailable
           // forces an impaired transition. Purrsonality doesn't track
           // resource-level health internally; the baseline is sufficient for
-          // current storyboards. impaired transitions would need creative
-          // status tracking before they could fire here.
+          // current storyboards.
           health: 'ok',
           impairments: [],
-          // Legacy-shape packages (seeded by 3.1 package_correlation_legacy_fallback)
-          // are emitted verbatim — package_id + context only, no product_id —
-          // so buyers exercising the compatibility path can correlate by
-          // buyer_ref. Otherwise build packages from product_ids[].
-          packages: o.legacy_packages && o.legacy_packages.length > 0
+          // Package projection precedence: seeded_packages (full overrides
+          // via comply seed_media_buy) → legacy_packages (3.1
+          // package_correlation_legacy_fallback, package_id+context only,
+          // no product_id) → synthesised from product_ids[].
+          packages: o.seeded_packages && o.seeded_packages.length > 0
+            ? o.seeded_packages.map((sp) => ({
+                ...(sp.package_id !== undefined && { package_id: sp.package_id }),
+                ...(sp.product_id !== undefined && { product_id: sp.product_id }),
+                budget: sp.budget ?? 0,
+                pricing_option_id: 'po_cpm_default',
+                pacing: 'even' as const,
+                status: o.status === 'completed' || o.status === 'canceled' ? 'completed' : 'active',
+                ...(sp.context && Object.keys(sp.context).length > 0 && { context: sp.context }),
+              }))
+            : o.legacy_packages && o.legacy_packages.length > 0
             ? o.legacy_packages.map((lp) => ({
                 package_id: lp.package_id,
                 budget: 0,
                 pricing_option_id: 'po_cpm_default',
-                pacing: 'even',
+                pacing: 'even' as const,
                 status: o.status === 'completed' || o.status === 'canceled' ? 'completed' : 'active',
                 ...(lp.context && Object.keys(lp.context).length > 0 && { context: lp.context }),
               }))
             : o.product_ids.map((pid) => {
             const overlay = o.package_overlays?.[pid];
-            const pkgCtx = o.package_contexts?.[pid];
+            const pkgContext = o.package_contexts?.[pid];
             return {
               package_id: `${o.order_id}_${pid}`,
               product_id: pid,
               budget: o.package_budgets?.[pid] ?? 0,
               pricing_option_id: 'po_cpm_default',
               pacing: 'even',
+              ...(pkgContext && { context: pkgContext }),
               status: o.status === 'completed' || o.status === 'canceled' ? 'completed' : 'active',
               ...(overlay && {
                 targeting_overlay: {
@@ -976,7 +985,6 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
                   ...(overlay.collection_list && { collection_list: overlay.collection_list }),
                 },
               }),
-              ...(pkgCtx && Object.keys(pkgCtx).length > 0 && { context: pkgCtx }),
             };
           }),
         };
