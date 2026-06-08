@@ -445,6 +445,17 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       }
     }
 
+    // Persist per-package context (buyer_ref correlation) + top-level
+    // request context so subsequent get_media_buys reads can echo them.
+    const packageContexts: Record<string, Record<string, unknown>> = {};
+    for (const pkg of packages) {
+      const pkgContext = (pkg as { context?: Record<string, unknown> }).context;
+      if (pkgContext && Object.keys(pkgContext).length > 0) {
+        packageContexts[pkg.product_id] = pkgContext;
+      }
+    }
+    const requestContext = (req as { context?: Record<string, unknown> }).context;
+
     const order = mockUpstream.createOrder({
       network_code: account.ctx_metadata.network_code,
       advertiser_id: account.id,
@@ -458,6 +469,8 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       ...(rTop.end_time !== undefined && { flight_end: rTop.end_time }),
       client_request_id: req.idempotency_key,
       package_budgets: packageBudgets,
+      package_contexts: packageContexts,
+      ...(requestContext && { request_context: requestContext }),
       status: hasAnyCreatives ? 'confirmed' : 'pending_creatives',
     });
 
@@ -771,14 +784,27 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           revision: 1,
           valid_actions: validActionsForStatus(wireStatus),
           ...(availableActions.length > 0 && { available_actions: availableActions }),
-          packages: o.product_ids.map((pid) => {
+          ...(o.request_context && { context: o.request_context }),
+          packages: o.seeded_packages
+            ? o.seeded_packages.map((sp) => ({
+                ...(sp.package_id !== undefined && { package_id: sp.package_id }),
+                ...(sp.product_id !== undefined && { product_id: sp.product_id }),
+                budget: sp.budget ?? 0,
+                pricing_option_id: 'po_cpm_default',
+                pacing: 'even' as const,
+                status: o.status === 'completed' || o.status === 'canceled' ? 'completed' : 'active',
+                ...(sp.context && { context: sp.context }),
+              }))
+            : o.product_ids.map((pid) => {
             const overlay = o.package_overlays?.[pid];
+            const pkgContext = o.package_contexts?.[pid];
             return {
               package_id: `${o.order_id}_${pid}`,
               product_id: pid,
               budget: o.package_budgets?.[pid] ?? 0,
               pricing_option_id: 'po_cpm_default',
               pacing: 'even',
+              ...(pkgContext && { context: pkgContext }),
               status: o.status === 'completed' || o.status === 'canceled' ? 'completed' : 'active',
               ...(overlay && {
                 targeting_overlay: {

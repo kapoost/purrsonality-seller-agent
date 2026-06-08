@@ -78,7 +78,23 @@ export const complyTest: ComplyControllerConfig = {
         budget?: number;
         currency?: string;
         product_ids?: string[];
+        packages?: ReadonlyArray<{
+          package_id?: string;
+          product_id?: string;
+          budget?: number;
+          context?: Record<string, unknown>;
+        }>;
       };
+      // Legacy-fallback storyboards seed packages directly with custom
+      // package_id (and sometimes without product_id) — preserve the
+      // exact shape so get_media_buys returns the seeded packages
+      // verbatim instead of synthesising `${order_id}_${product_id}`.
+      const packageOverrides = (fixture.packages ?? []).map((p) => ({
+        ...(p.package_id !== undefined && { package_id: p.package_id }),
+        ...(p.product_id !== undefined && { product_id: p.product_id }),
+        ...(p.budget !== undefined && { budget: p.budget }),
+        ...(p.context && { context: p.context }),
+      }));
       mockUpstream.seedOrder({
         media_buy_id: params.media_buy_id,
         network_code: PUBLISHER.network_code,
@@ -86,6 +102,7 @@ export const complyTest: ComplyControllerConfig = {
         product_ids: fixture.product_ids ?? [],
         budget: fixture.budget ?? 0,
         currency: fixture.currency ?? 'USD',
+        ...(packageOverrides.length > 0 && { packages: packageOverrides }),
         ...(fixture.status && { status: mockStatus(fixture.status) }),
       });
     },

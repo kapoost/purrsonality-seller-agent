@@ -15,6 +15,24 @@ export interface MockOrder {
   client_request_id?: string;
   package_overlays?: Record<string, PackageOverlay>;
   package_budgets?: Record<string, number>;
+  /** Per-package context echoed back on get_media_buys reads — keyed by
+   * product_id so the legacy package-correlation flow can resolve
+   * `buyer_ref` after a sync. */
+  package_contexts?: Record<string, Record<string, unknown>>;
+  /** Buyer-supplied request-level context (correlation_id, etc.) echoed
+   * back on subsequent get_media_buys reads. */
+  request_context?: Record<string, unknown>;
+  /** Seeded package overrides — when present (via comply_test_controller
+   * seed_media_buy), get_media_buys returns these verbatim instead of
+   * synthesising packages from `product_ids`. Used by legacy-fallback
+   * scenarios where a seller assigned a custom package_id and may have
+   * omitted product_id altogether. */
+  seeded_packages?: ReadonlyArray<{
+    package_id?: string;
+    product_id?: string;
+    budget?: number;
+    context?: Record<string, unknown>;
+  }>;
 }
 
 export interface PackageOverlay {
@@ -132,6 +150,8 @@ export const mockUpstream = {
     flight_end?: string;
     client_request_id?: string;
     package_budgets?: Record<string, number>;
+    package_contexts?: Record<string, Record<string, unknown>>;
+    request_context?: Record<string, unknown>;
     status?: MockOrder['status'];
   }): MockOrder {
     if (args.client_request_id) {
@@ -156,6 +176,8 @@ export const mockUpstream = {
       created_at: new Date().toISOString(),
       ...(args.client_request_id !== undefined && { client_request_id: args.client_request_id }),
       ...(args.package_budgets && { package_budgets: { ...args.package_budgets } }),
+      ...(args.package_contexts && Object.keys(args.package_contexts).length > 0 && { package_contexts: { ...args.package_contexts } }),
+      ...(args.request_context && Object.keys(args.request_context).length > 0 && { request_context: { ...args.request_context } }),
     };
 
     orders.set(order.order_id, order);
@@ -238,6 +260,7 @@ export const mockUpstream = {
     budget?: number;
     currency?: string;
     status?: MockOrder['status'];
+    packages?: MockOrder['seeded_packages'];
   }): MockOrder {
     const existing = orders.get(args.media_buy_id);
     const order: MockOrder = existing ?? {
@@ -250,8 +273,10 @@ export const mockUpstream = {
       pacing: 'even',
       status: args.status ?? 'confirmed',
       created_at: new Date().toISOString(),
+      ...(args.packages && args.packages.length > 0 && { seeded_packages: args.packages }),
     };
     if (args.status) order.status = args.status;
+    if (args.packages && args.packages.length > 0) order.seeded_packages = args.packages;
     orders.set(args.media_buy_id, order);
     return order;
   },
