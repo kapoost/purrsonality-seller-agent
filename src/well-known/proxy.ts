@@ -163,14 +163,14 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
         });
       }
 
-      // ── Phase B: live slot for purrsonality.pages.dev ───────────────
+      // ── Phase B: live slot for purrsonality.rocketscience.pl ─────────
       // Real-user serve endpoint embedded as an iframe on the quiz result
       // page (see cats/src/components/AdSlot.astro). Picks the latest
       // approved creative — operator's last Approve action automatically
       // becomes the live banner.
       //
       // Differs from /preview by:
-      //   - frame-ancestors CSP allows purrsonality.pages.dev embed
+      //   - frame-ancestors CSP allows both prod (rocketscience.pl) and dev (pages.dev) embeds
       //   - HTML is minimal (no chrome / metadata), pure banner
       //   - impression event records media_buy_id='live-result-slot'
       //   - 404 when no approved creative exists (operator hasn't reviewed any)
@@ -181,7 +181,7 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           return new Response('no approved creative available', {
             status: 404,
             headers: {
-              'Content-Security-Policy': "frame-ancestors 'self' https://purrsonality.pages.dev https://*.purrsonality.pages.dev",
+              'Content-Security-Policy': "frame-ancestors 'self' https://purrsonality.rocketscience.pl https://purrsonality.pages.dev https://*.purrsonality.pages.dev",
               'Cache-Control': 'no-store',
             },
           });
@@ -215,8 +215,8 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           headers: {
             'Content-Type': 'text/html; charset=utf-8',
             'Cache-Control': 'no-store',
-            // Allow embedding on purrsonality.pages.dev + Cloudflare preview deployments
-            'Content-Security-Policy': "frame-ancestors 'self' https://purrsonality.pages.dev https://*.purrsonality.pages.dev",
+            // Allow embedding on purrsonality.rocketscience.pl (prod) + purrsonality.pages.dev (dev) + CF preview deployments
+            'Content-Security-Policy': "frame-ancestors 'self' https://purrsonality.rocketscience.pl https://purrsonality.pages.dev https://*.purrsonality.pages.dev",
             'X-Robots-Tag': 'noindex',
             'Referrer-Policy': 'no-referrer-when-downgrade',
           },

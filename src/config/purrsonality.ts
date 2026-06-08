@@ -16,9 +16,11 @@ export const SIGNALS: readonly PurrSignal[] = [
   { id: 'purr_persona_tyrant',    name: 'Cat owner — assertive cat',       description: 'Result: dominant, defensive cat (The Tiny Tyrant).', type: 'behavioral' },
 ] as const;
 
+export type MediaBuyActionMode = 'self_serve' | 'conditional_self_serve' | 'requires_approval';
+
 export interface ProductAllowedAction {
   action: string;
-  modes: readonly string[];
+  modes: readonly MediaBuyActionMode[];
   sla?: { response_max?: string; completion_max?: string };
   terms_ref?: string;
   allowed_statuses?: readonly string[];
@@ -63,7 +65,7 @@ export const FORMATS = [
 export const PUBLISHER = {
   network_code: 'purrsonality',
   display_name: 'Purrsonality',
-  adcp_publisher: 'purrsonality.pages.dev',
+  adcp_publisher: 'purrsonality.rocketscience.pl',
 } as const;
 
 export function formatAgentUrl(env: Env): string {

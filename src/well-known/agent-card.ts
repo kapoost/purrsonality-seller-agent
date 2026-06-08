@@ -19,7 +19,7 @@ export function buildAgentCard(opts: AgentCardOptions): Record<string, unknown> 
   return {
     name: 'Purrsonality Seller',
     description:
-      'Single-slot non-guaranteed display seller for purrsonality.pages.dev (cat-personality quiz result page). ' +
+      'Single-slot non-guaranteed display seller for purrsonality.rocketscience.pl (cat-personality quiz result page). ' +
       'AdCP 3.0 protocol via MCP transport. Reference implementation: ' +
       'https://github.com/kapoost/purrsonality-seller-agent',
     url: opts.agentUrl,
