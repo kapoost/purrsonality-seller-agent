@@ -1,4 +1,4 @@
-import { createAdcpServerFromPlatform, serve, verifyApiKey, type AdcpServer } from '@adcp/sdk/server';
+import { createAdcpServerFromPlatform, serve, verifyApiKey } from '@adcp/sdk/server';
 import { startAdminServer } from './admin/server.ts';
 import { complyTest } from './comply.ts';
 import { runMigrations } from './db/migrations.ts';
@@ -23,7 +23,6 @@ const env = loadEnv();
 await runMigrations();
 startMetricsFlusher();
 startHeartbeat();
-let adcpServerHandle: AdcpServer | null = null;
 startAdminServer({
   port: env.ADMIN_PORT ?? env.PORT + 1,
   authToken: env.ADCP_AUTH_TOKEN,
@@ -31,7 +30,6 @@ startAdminServer({
   agentVersion: '0.0.1',
   databaseBackend: env.DATABASE_URL ? 'postgres' : 'in-memory',
   nodeEnv: env.NODE_ENV,
-  getAdcpServer: () => adcpServerHandle,
 });
 
 // The SDK's `serve()` is a self-contained http.Server that only answers
@@ -41,8 +39,8 @@ startAdminServer({
 const sdkPort = env.PORT + 100;
 
 serve(
-  ({ taskStore }) => {
-    const server = createAdcpServerFromPlatform(platform, {
+  ({ taskStore }) =>
+    createAdcpServerFromPlatform(platform, {
       name: 'purrsonality-seller',
       version: '0.0.1',
       taskStore,
@@ -66,10 +64,7 @@ serve(
       // opt-in remains possible via /.well-known/jwks.json; we just don't
       // *verify* incoming signatures at the SDK level anymore.
       complyTest,
-    });
-    adcpServerHandle = server;
-    return server;
-  },
+    }),
   {
     port: sdkPort,
     // Start the public proxy ONLY after the SDK is ready to receive forwarded

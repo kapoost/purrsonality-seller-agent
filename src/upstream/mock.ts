@@ -374,6 +374,15 @@ export const mockUpstream = {
   // process (upstream adcp#5247), which degrades the baseline on the second
   // run of the same suite against the same seller process. Operators call
   // this between full-suite runs to recover the fresh-start baseline.
+  //
+  // Note (sdk-9x reconcile 2026-06-23): bridge's revert (commit 7a38fde)
+  // removed clearAll claiming SDK 9.x has native `taskRegistry.clear()`.
+  // True, but our clearAll covers MORE than the task registry — orders,
+  // request keys, delivery sim, seeded products/creatives/formats,
+  // proposals, create-media-buy directives, AND Phase-2 account/creative
+  // status overrides. SDK has no native equivalent for the upstream mock
+  // state, so clearAll stays. The bridge's revert applies only to the
+  // taskRegistry side which is handled in src/stores/index.ts.
   clearAll(): void {
     orders.clear();
     requestKey.clear();
