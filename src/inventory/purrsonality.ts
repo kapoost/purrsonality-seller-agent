@@ -17,12 +17,12 @@ import {
   AdcpError,
   buildProduct,
   defineSalesPlatform,
+  type GetProductsPayload,
   type SyncCreativesRow,
 } from '@adcp/sdk/server';
 import { FormatAsset } from '@adcp/sdk';
 import type {
   GetProductsRequest,
-  GetProductsResponse,
   CreateMediaBuyRequest,
   CreateMediaBuySuccess,
   UpdateMediaBuyRequest,
@@ -169,7 +169,7 @@ function buildPackageResponse(orderId: string, productId: string, budget: number
 }
 
 const handlers = defineSalesPlatform<PurrAccountMeta>({
-  async getProducts(req: GetProductsRequest, _ctx): Promise<GetProductsResponse> {
+  async getProducts(req: GetProductsRequest, _ctx) {
     const r = req as {
       buying_mode?: string;
       brief?: string;
@@ -241,7 +241,8 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       return {
         products,
         proposals: [generateProposal(undefined, false, '_a'), generateProposal(undefined, false, '_b')],
-      } as unknown as GetProductsResponse;
+        cache_scope: 'public' as const,
+      } satisfies GetProductsPayload;
     }
 
     if (r.buying_mode === 'refine' && Array.isArray(r.refine) && r.refine.length > 0 && products.length > 0) {
@@ -289,7 +290,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         if (entry.scope === 'proposal') {
           return {
             scope: 'proposal' as const,
-            proposal_id: entry.proposal_id,
+            proposal_id: entry.proposal_id ?? '',
             status: 'applied' as const,
             notes: `Refinement '${entry.action ?? 'update'}' applied to proposal`,
           };
@@ -297,7 +298,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         if (entry.scope === 'product') {
           return {
             scope: 'product' as const,
-            product_id: entry.product_id,
+            product_id: entry.product_id ?? '',
             status: 'applied' as const,
             notes: `Refinement '${entry.action ?? 'update'}' applied to product`,
           };
@@ -311,10 +312,11 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         products,
         proposals: proposals.length > 0 ? proposals : [generateProposal()],
         refinement_applied,
-      } as unknown as GetProductsResponse;
+        cache_scope: 'public' as const,
+      } satisfies GetProductsPayload;
     }
 
-    return { products };
+    return { products, cache_scope: 'public' as const } satisfies GetProductsPayload;
   },
 
   async createMediaBuy(req: CreateMediaBuyRequest, ctx) {
