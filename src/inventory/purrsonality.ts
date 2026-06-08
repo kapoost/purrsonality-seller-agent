@@ -360,17 +360,21 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       }
     }
 
+    // AdCP 3.1 allows the literal "asap" as start_time (immediate start);
+    // skip ISO ordering checks when either bound is non-iso so we don't trip
+    // string-comparing "asap" against a 2026 timestamp.
+    const isIsoTime = (s: string): boolean => /^\d{4}-\d{2}-\d{2}T/.test(s);
     const rTop = req as { start_time?: string; end_time?: string; flight?: { start_time?: string; end_time?: string } };
-    if (rTop.start_time && rTop.end_time && rTop.start_time > rTop.end_time) {
+    if (rTop.start_time && rTop.end_time && isIsoTime(rTop.start_time) && isIsoTime(rTop.end_time) && rTop.start_time > rTop.end_time) {
       throw new AdcpError('VALIDATION_ERROR', { message: 'start_time must be before end_time', field: '/end_time' });
     }
     const flight = rTop.flight;
-    if (flight?.start_time && flight?.end_time && flight.start_time > flight.end_time) {
+    if (flight?.start_time && flight?.end_time && isIsoTime(flight.start_time) && isIsoTime(flight.end_time) && flight.start_time > flight.end_time) {
       throw new AdcpError('VALIDATION_ERROR', { message: 'flight.start_time must be before flight.end_time', field: '/flight/end_time' });
     }
     for (const pkg of packages) {
       const pkgFlight = pkg as { start_time?: string; end_time?: string };
-      if (pkgFlight.start_time && pkgFlight.end_time && pkgFlight.start_time > pkgFlight.end_time) {
+      if (pkgFlight.start_time && pkgFlight.end_time && isIsoTime(pkgFlight.start_time) && isIsoTime(pkgFlight.end_time) && pkgFlight.start_time > pkgFlight.end_time) {
         throw new AdcpError('VALIDATION_ERROR', { message: 'package.start_time must be before package.end_time', field: '/packages/0/end_time' });
       }
     }
@@ -798,8 +802,11 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
   async listCreativeFormats(
     req: ListCreativeFormatsRequest,
     _ctx,
-  ): Promise<ListCreativeFormatsResponse> {
-    const r = (req ?? {}) as { pagination?: { max_results?: number; cursor?: string } };
+  ) {
+    const r = (req ?? {}) as {
+      pagination?: { max_results?: number; cursor?: string };
+      format_ids?: ReadonlyArray<{ agent_url?: string; id: string } | string>;
+    };
     const displaySlots = [
       FormatAsset.image({ asset_id: 'image', required: true }),
       FormatAsset.url({ asset_id: 'click_url', required: true }),
@@ -834,8 +841,21 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         assets: (fAny['assets'] as unknown[]) ?? displaySlots,
       };
     });
-    const inPaginationTest = r.pagination !== undefined && seeded.length > 0;
-    const allFormats = inPaginationTest ? seeded : [...builtIn, ...seeded];
+    // format_ids[] filter — buyers asking for specific catalog entries get
+    // those entries back and nothing else. Accepts either strings or
+    // structured format_id refs; matches on the id segment of the ref.
+    // When the filter is active, ignore the pagination-test seeded-only
+    // isolation: a buyer that knows the exact format_id deserves the
+    // built-in entry if it matches.
+    const hasFormatFilter = Array.isArray(r.format_ids) && r.format_ids.length > 0;
+    const inPaginationTest = !hasFormatFilter && r.pagination !== undefined && seeded.length > 0;
+    let allFormats = inPaginationTest ? seeded : [...builtIn, ...seeded];
+    if (hasFormatFilter) {
+      const wantedIds = new Set(
+        r.format_ids!.map((f) => (typeof f === 'string' ? f : f.id)),
+      );
+      allFormats = allFormats.filter((f) => wantedIds.has(f.format_id.id));
+    }
     const pageSize = Math.max(1, Math.min(100, r.pagination?.max_results ?? 100));
     const offset = Number.parseInt(r.pagination?.cursor ?? '0', 10) || 0;
     const page = allFormats.slice(offset, offset + pageSize);
