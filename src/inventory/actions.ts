@@ -1,9 +1,11 @@
 import type { MediaBuyStatus } from '@adcp/sdk';
 import type { ProductAllowedAction, PurrProductConfig } from '../config/purrsonality.ts';
 
+export type MediaBuyActionMode = 'self_serve' | 'conditional_self_serve' | 'requires_approval';
+
 export interface BuyAvailableAction {
   action: string;
-  mode: string;
+  mode: MediaBuyActionMode;
   sla?: { response_max?: string; completion_max?: string };
   terms_ref?: string;
   allowed_statuses?: readonly string[];
@@ -14,7 +16,7 @@ export function productAllowedActionsToBuyAvailable(
 ): BuyAvailableAction[] {
   return productAllowed.map((pa) => ({
     action: pa.action,
-    mode: pa.modes[0] ?? 'self_serve',
+    mode: (pa.modes[0] ?? 'self_serve') as MediaBuyActionMode,
     ...(pa.sla && { sla: pa.sla }),
     ...(pa.terms_ref !== undefined && { terms_ref: pa.terms_ref }),
     ...(pa.allowed_statuses && { allowed_statuses: pa.allowed_statuses }),

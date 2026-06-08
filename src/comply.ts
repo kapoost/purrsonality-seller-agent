@@ -42,11 +42,20 @@ export const complyTest: ComplyControllerConfig = {
             .map((f) => (typeof f === 'string' ? f : f?.id))
             .filter((s): s is string => typeof s === 'string' && knownFormats.has(s))
         : undefined;
+      const SUPPORTED_MODES = new Set(['self_serve', 'conditional_self_serve', 'requires_approval']);
+      const allowed_actions = fixture.allowed_actions
+        ?.map((a) => ({
+          ...a,
+          modes: a.modes.filter((m): m is 'self_serve' | 'conditional_self_serve' | 'requires_approval' =>
+            SUPPORTED_MODES.has(m),
+          ),
+        }))
+        .filter((a) => a.modes.length > 0);
       mockUpstream.seedProduct(params.product_id, {
         ...(fixture.name !== undefined && { name: fixture.name }),
         ...(fixture.description !== undefined && { description: fixture.description }),
         ...(format_ids && format_ids.length > 0 && { format_ids }),
-        ...(fixture.allowed_actions && { allowed_actions: fixture.allowed_actions }),
+        ...(allowed_actions && allowed_actions.length > 0 && { allowed_actions }),
       });
     },
     pricing_option: async (params) => {
