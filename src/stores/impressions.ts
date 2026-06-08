@@ -86,6 +86,13 @@ export const impressionsStore = {
     };
   },
 
+  /** Drop all in-memory rows. Sandbox/compliance-reset only — Postgres
+   * is untouched. See admin reset endpoint comments for upstream
+   * adcp#5247 context. */
+  clearInMemory(): void {
+    memory.length = 0;
+  },
+
   /** Stats grouped by creative_id (used by admin "Recently approved" panel). */
   async statsForCreatives(ids: string[]): Promise<Record<string, ImpressionStats>> {
     const out: Record<string, ImpressionStats> = {};

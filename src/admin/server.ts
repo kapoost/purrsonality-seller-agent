@@ -12,12 +12,15 @@
 // sends as Bearer on api/metrics polls.
 
 import { join } from 'node:path';
+import type { AdcpServer } from '@adcp/sdk/server';
 import { metrics } from '../observability/metrics.ts';
 import { queryMetrics, queryAuditEvents } from '../observability/metrics-store.ts';
 import { creativesStore, type CreativeStatus } from '../stores/creatives.ts';
 import { impressionsStore } from '../stores/impressions.ts';
+import { resetInMemoryTaskRegistry } from '../stores/index.ts';
 import { getPool } from '../db/pool.ts';
 import { log } from '../observability/logger.ts';
+import { mockUpstream } from '../upstream/mock.ts';
 
 interface AdminConfig {
   port: number;
@@ -26,6 +29,7 @@ interface AdminConfig {
   agentVersion: string;
   databaseBackend: string;
   nodeEnv: string;
+  getAdcpServer?: () => AdcpServer | null;
 }
 
 let server: ReturnType<typeof Bun.serve> | null = null;
@@ -246,6 +250,47 @@ export function startAdminServer(cfg: AdminConfig): void {
         }
 
         return Response.json({ error: 'not_found' }, { status: 404, headers: corsHeaders });
+      }
+
+      // Protected: clear in-memory state between full-suite compliance runs.
+      // Workaround for upstream adcp#5247 — the runner does not isolate
+      // comply_test_controller state between storyboards, so seeds accumulate
+      // across a full suite run. Re-running against the same process drops
+      // baseline from 131/1/53 to 125/4/56 in our reproduction. This endpoint
+      // restores the fresh-start baseline without a process restart.
+      //
+      // Calls SDK `server.compliance.reset()` (clears stateStore + idempotency)
+      // and `mockUpstream.clearAll()` (clears the fake-upstream maps the
+      // sales handlers read from).
+      if (url.pathname === '/api/mock-state/reset' && req.method === 'POST') {
+        const auth = req.headers.get('authorization');
+        const provided = auth?.startsWith('Bearer ') ? auth.slice(7) : null;
+        if (provided !== cfg.authToken) {
+          return Response.json({ error: 'unauthorized' }, { status: 401, headers: corsHeaders });
+        }
+        const cleared: string[] = [];
+        const adcpServer = cfg.getAdcpServer?.() ?? null;
+        if (adcpServer) {
+          try {
+            await adcpServer.compliance.reset();
+            cleared.push('sdk_state_and_idempotency');
+          } catch (err) {
+            return Response.json(
+              { error: 'sdk_reset_failed', message: (err as Error).message?.slice(0, 300) },
+              { status: 500, headers: corsHeaders },
+            );
+          }
+        }
+        mockUpstream.clearAll();
+        cleared.push('mock_upstream');
+        if (cfg.databaseBackend === 'in-memory') {
+          creativesStore.clearInMemory();
+          impressionsStore.clearInMemory();
+          cleared.push('creatives_in_memory', 'impressions_in_memory');
+          if (resetInMemoryTaskRegistry()) cleared.push('task_registry_in_memory');
+        }
+        log.info('mock_state_reset', { backend: cfg.databaseBackend, cleared });
+        return Response.json({ success: true, cleared }, { headers: corsHeaders });
       }
 
       // Static dashboard HTML

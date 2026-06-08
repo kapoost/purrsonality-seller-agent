@@ -231,6 +231,13 @@ export const creativesStore = {
     return res.rows[0] ? rowFromPg(res.rows[0]) : null;
   },
 
+  /** Drop all in-memory rows. Sandbox/compliance-reset only — Postgres
+   * is untouched (real persistence is the DB's job). See admin reset
+   * endpoint comments for the upstream adcp#5247 context. */
+  clearInMemory(): void {
+    memory.clear();
+  },
+
   async get(id: string): Promise<CreativeRow | null> {
     const pool = getPool();
     if (!pool) return memoryGet(id);

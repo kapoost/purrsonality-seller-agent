@@ -281,4 +281,20 @@ export const mockUpstream = {
       currency: delta.currency ?? prev.currency,
     });
   },
+
+  // Wipe all module-level state. Sandbox-only escape hatch for in-memory mode:
+  // the compliance runner accumulates seeds across storyboards within one
+  // process (upstream adcp#5247), which degrades the baseline on the second
+  // run of the same suite against the same seller process. Operators call
+  // this between full-suite runs to recover the fresh-start baseline.
+  clearAll(): void {
+    orders.clear();
+    requestKey.clear();
+    deliverySim.clear();
+    seededProducts.clear();
+    seededCreatives.clear();
+    seededFormats.clear();
+    proposalsMap.clear();
+    createMediaBuyDirectives.clear();
+  },
 };
