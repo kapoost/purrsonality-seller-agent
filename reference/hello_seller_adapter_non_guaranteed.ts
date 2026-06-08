@@ -88,7 +88,7 @@ import type {
 } from '@adcp/sdk/types';
 
 // `Product` isn't re-exported from `@adcp/sdk/types`; derive from response.
-type Product = GetProductsResponse['products'][number];
+type Product = NonNullable<GetProductsResponse['products']>[number];
 
 const UPSTREAM_URL = process.env['UPSTREAM_URL'] ?? 'http://127.0.0.1:4451';
 const UPSTREAM_API_KEY = process.env['UPSTREAM_API_KEY'] ?? 'mock_sales_non_guaranteed_key_do_not_use_in_prod';
@@ -580,7 +580,7 @@ class SalesNonGuaranteedAdapter implements DecisioningPlatform<Record<string, ne
   // all-optional and `RequiredPlatformsFor<'sales-non-guaranteed'>` requires
   // the closed shape on the way out.
   sales: SalesCorePlatform<NetworkMeta> & SalesIngestionPlatform<NetworkMeta> = {
-    getProducts: async (req: GetProductsRequest, ctx): Promise<GetProductsResponse> => {
+    getProducts: async (req: GetProductsRequest, ctx) => {
       const networkCode = ctx.account.ctx_metadata.network_code;
       const publisherDomain = ctx.account.ctx_metadata.publisher_domain;
       // When the buyer provides structured filters (flight dates, budget),
@@ -786,7 +786,7 @@ class SalesNonGuaranteedAdapter implements DecisioningPlatform<Record<string, ne
       };
     },
 
-    getMediaBuyDelivery: async (req: GetMediaBuyDeliveryRequest, ctx): Promise<GetMediaBuyDeliveryResponse> => {
+    getMediaBuyDelivery: async (req: GetMediaBuyDeliveryRequest, ctx) => {
       const networkCode = ctx.account.ctx_metadata.network_code;
       const requestedIds = req.media_buy_ids ?? [];
       // Multi-id pass-through per #1342 contract — fan out per id; framework
@@ -853,7 +853,7 @@ class SalesNonGuaranteedAdapter implements DecisioningPlatform<Record<string, ne
       return response;
     },
 
-    getMediaBuys: async (req: GetMediaBuysRequest, ctx): Promise<GetMediaBuysResponse> => {
+    getMediaBuys: async (req: GetMediaBuysRequest, ctx) => {
       const networkCode = ctx.account.ctx_metadata.network_code;
       const requestedIds = req.media_buy_ids ?? [];
       let orders: UpstreamOrder[];
@@ -938,7 +938,7 @@ class SalesNonGuaranteedAdapter implements DecisioningPlatform<Record<string, ne
       return out;
     },
 
-    listCreativeFormats: async (_req, _ctx): Promise<ListCreativeFormatsResponse> => {
+    listCreativeFormats: async (_req, _ctx) => {
       // Publisher-owned format catalog. The mock doesn't have a discrete
       // formats endpoint (formats live inline on Product); production sellers
       // typically expose `/v1/formats` separately. SWAP: replace with your

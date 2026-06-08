@@ -17,12 +17,12 @@ import {
   AdcpError,
   buildProduct,
   defineSalesPlatform,
+  type GetProductsPayload,
   type SyncCreativesRow,
 } from '@adcp/sdk/server';
 import { FormatAsset } from '@adcp/sdk';
 import type {
   GetProductsRequest,
-  GetProductsResponse,
   CreateMediaBuyRequest,
   CreateMediaBuySuccess,
   UpdateMediaBuyRequest,
@@ -180,7 +180,7 @@ function buildPackageResponse(
 }
 
 const handlers = defineSalesPlatform<PurrAccountMeta>({
-  async getProducts(req: GetProductsRequest, _ctx): Promise<GetProductsResponse> {
+  async getProducts(req: GetProductsRequest, _ctx) {
     const r = req as {
       buying_mode?: string;
       brief?: string;
@@ -314,7 +314,8 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         products,
         cache_scope: 'public',
         proposals: [generateProposal(undefined, false, '_a'), generateProposal(undefined, false, '_b')],
-      } as unknown as GetProductsResponse;
+        cache_scope: 'public' as const,
+      } satisfies GetProductsPayload;
     }
 
     if (r.buying_mode === 'refine' && Array.isArray(r.refine) && r.refine.length > 0 && products.length > 0) {
@@ -362,7 +363,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         if (entry.scope === 'proposal') {
           return {
             scope: 'proposal' as const,
-            proposal_id: entry.proposal_id,
+            proposal_id: entry.proposal_id ?? '',
             status: 'applied' as const,
             notes: `Refinement '${entry.action ?? 'update'}' applied to proposal`,
           };
@@ -370,7 +371,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         if (entry.scope === 'product') {
           return {
             scope: 'product' as const,
-            product_id: entry.product_id,
+            product_id: entry.product_id ?? '',
             status: 'applied' as const,
             notes: `Refinement '${entry.action ?? 'update'}' applied to product`,
           };
@@ -382,17 +383,13 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         .map((e) => generateProposal(e.proposal_id, e.action === 'finalize'));
       return {
         products,
-        cache_scope: 'public',
         proposals: proposals.length > 0 ? proposals : [generateProposal()],
         refinement_applied,
-      } as unknown as GetProductsResponse;
+        cache_scope: 'public' as const,
+      } satisfies GetProductsPayload;
     }
 
-    // AdCP 3.1 cache_scope: 'public' = universal rate card (single-publisher
-    // Purrsonality has no account-specific overlays). Required field starting
-    // with 3.1 storyboard validators even when SDK pin is 7.x; SDK passes
-    // unknown fields through unchanged so this is safe forward-compat.
-    return { products, cache_scope: 'public' } as unknown as GetProductsResponse;
+    return { products, cache_scope: 'public' as const } satisfies GetProductsPayload;
   },
 
   async createMediaBuy(req: CreateMediaBuyRequest, ctx) {

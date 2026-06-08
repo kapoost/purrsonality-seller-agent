@@ -21,6 +21,6 @@
     "forceConsistentCasingInFileNames": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "reference/**/*.ts"],
-  "exclude": ["node_modules", "dist", "spike"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "spike", "reference"]
 }
