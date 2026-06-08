@@ -157,7 +157,14 @@ function validActionsForStatus(status: MediaBuyStatus): MediaBuyStatus extends n
   }
 }
 
-function buildPackageResponse(orderId: string, productId: string, budget: number, pricingOptionId: string, hasCreatives: boolean): Package {
+function buildPackageResponse(
+  orderId: string,
+  productId: string,
+  budget: number,
+  pricingOptionId: string,
+  hasCreatives: boolean,
+  inputContext?: Record<string, unknown> | undefined,
+): Package {
   return {
     package_id: `${orderId}_${productId}`,
     product_id: productId,
@@ -165,6 +172,7 @@ function buildPackageResponse(orderId: string, productId: string, budget: number
     pricing_option_id: pricingOptionId,
     pacing: 'even',
     status: hasCreatives ? 'active' : 'pending_creatives',
+    ...(inputContext && Object.keys(inputContext).length > 0 && { context: inputContext }),
   } as unknown as Package;
 }
 
@@ -197,7 +205,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         formats: [...p.format_ids],
         agentUrl: FORMAT_AGENT_URL,
         delivery_type: 'non_guaranteed',
-        pricing: { model: 'cpm', floor: p.min_cpm, currency: p.currency },
+        pricing: { model: 'cpm', fixed: p.min_cpm, currency: p.currency },
         publisher_domain: PUBLISHER.adcp_publisher,
         channels: [p.channel],
         ctx_metadata: { ad_unit_ids: [...p.ad_unit_ids] },
@@ -460,6 +468,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     const successResponse: CreateMediaBuySuccess = {
       media_buy_id: order.order_id,
       status,
+      health: 'ok' as const,
       valid_actions: validActionsForStatus(status),
       ...(availableActions.length > 0 && { available_actions: availableActions }),
       confirmed_at: order.created_at,
@@ -471,6 +480,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           pkg.budget,
           pkg.pricing_option_id ?? 'po_cpm_default',
           hasAnyCreatives,
+          (pkg as { context?: Record<string, unknown> }).context,
         ),
       ),
     } as unknown as CreateMediaBuySuccess;
@@ -613,6 +623,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     return {
       media_buy_id: buyId,
       status: newWireStatus,
+      health: 'ok' as const,
       valid_actions: validActionsForStatus(newWireStatus),
       ...(postAvailableActions.length > 0 && { available_actions: postAvailableActions }),
       revision: 2,
@@ -749,6 +760,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         return {
           media_buy_id: o.order_id,
           status: wireStatus,
+          health: 'ok' as const,
           currency: o.currency,
           total_budget: o.budget,
           confirmed_at: o.created_at,
