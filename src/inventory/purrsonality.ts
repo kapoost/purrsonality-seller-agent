@@ -197,7 +197,13 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         formats: [...p.format_ids],
         agentUrl: FORMAT_AGENT_URL,
         delivery_type: 'non_guaranteed',
-        pricing: { model: 'cpm', floor: p.min_cpm, currency: p.currency },
+        // Fixed CPM rate card (no auction). 3.1 storyboards (canonical_formats,
+        // measurement_*, inventory_list_*, refine_products, dependency_*,
+        // pending_creatives_to_start, …) assert /pricing_options/0/fixed_price
+        // present — emitting floor_price marks the option as auction-based and
+        // fails those captures. Purrsonality slot is single-publisher, non-
+        // guaranteed display sold at a published rate, not auctioned.
+        pricing: { model: 'cpm', fixed: p.min_cpm, currency: p.currency },
         publisher_domain: PUBLISHER.adcp_publisher,
         channels: [p.channel],
         ctx_metadata: { ad_unit_ids: [...p.ad_unit_ids] },
@@ -240,6 +246,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // proposal response would silently skip half the scenario.
       return {
         products,
+        cache_scope: 'public',
         proposals: [generateProposal(undefined, false, '_a'), generateProposal(undefined, false, '_b')],
       } as unknown as GetProductsResponse;
     }
@@ -309,12 +316,17 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         .map((e) => generateProposal(e.proposal_id, e.action === 'finalize'));
       return {
         products,
+        cache_scope: 'public',
         proposals: proposals.length > 0 ? proposals : [generateProposal()],
         refinement_applied,
       } as unknown as GetProductsResponse;
     }
 
-    return { products };
+    // AdCP 3.1 cache_scope: 'public' = universal rate card (single-publisher
+    // Purrsonality has no account-specific overlays). Required field starting
+    // with 3.1 storyboard validators even when SDK pin is 7.x; SDK passes
+    // unknown fields through unchanged so this is safe forward-compat.
+    return { products, cache_scope: 'public' } as unknown as GetProductsResponse;
   },
 
   async createMediaBuy(req: CreateMediaBuyRequest, ctx) {
@@ -457,6 +469,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
 
     const successResponse: CreateMediaBuySuccess = {
       media_buy_id: order.order_id,
+      // AdCP 3.1 migration: media_buy_status is the canonical lifecycle
+      // field (pending_creatives / pending_start / active / paused); top-level
+      // status carries the same MediaBuyStatus during the migration window
+      // for 3.0 compatibility, and in 3.1 it shifts to task-envelope semantics
+      // (completed / submitted / failed). Setting both keeps 3.0 cache
+      // validators happy AND survives 3.1-aware runner coercion that reads
+      // /media_buy_status as ground truth.
+      media_buy_status: status,
       status,
       valid_actions: validActionsForStatus(status),
       ...(availableActions.length > 0 && { available_actions: availableActions }),
