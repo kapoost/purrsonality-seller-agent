@@ -15,6 +15,24 @@ interface AgentCardOptions {
   version: string;
 }
 
+// Canonical list of AdCP skill IDs this seller exposes. Mirrored into the
+// public /.well-known/adcp-capabilities.json so AdCP-aware discovery clients
+// (AAO comply suite, buyer agents) can match storyboard tracks without a
+// successful `tools/list` over MCP. Keep in sync with handlers + skills array
+// below — a single source of truth here prevents drift.
+export const SKILL_IDS = [
+  'get_adcp_capabilities',
+  'get_products',
+  'list_creative_formats',
+  'sync_creatives',
+  'list_creatives',
+  'create_media_buy',
+  'update_media_buy',
+  'get_media_buys',
+  'get_media_buy_delivery',
+  'list_accounts',
+] as const;
+
 export function buildAgentCard(opts: AgentCardOptions): Record<string, unknown> {
   return {
     name: 'Purrsonality Seller',

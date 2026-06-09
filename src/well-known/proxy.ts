@@ -28,6 +28,8 @@ interface ProxyOptions {
   publicPort: number;
   sdkPort: number;
   agentCard: Record<string, unknown>;
+  adcpCapabilities: Record<string, unknown>;
+  oauthProtectedResource: Record<string, unknown>;
 }
 
 let server: ReturnType<typeof Bun.serve> | null = null;
@@ -67,6 +69,8 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
   if (server) return;
 
   const cardBody = JSON.stringify(opts.agentCard, null, 2);
+  const adcpCapsBody = JSON.stringify(opts.adcpCapabilities, null, 2);
+  const oauthResourceBody = JSON.stringify(opts.oauthProtectedResource, null, 2);
   const startedAt = Date.now();
 
   server = Bun.serve({
@@ -77,6 +81,32 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
       // Public A2A discovery
       if (req.method === 'GET' && url.pathname === '/.well-known/agent.json') {
         return new Response(cardBody, {
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'public, max-age=300',
+          },
+        });
+      }
+
+      // Public AdCP-native discovery. Lets AdCP-aware clients (AAO comply
+      // suite, buyer agents) pick storyboard tracks / match capabilities
+      // without needing a successful `tools/list` over the bearer-walled
+      // /mcp endpoint.
+      if (req.method === 'GET' && url.pathname === '/.well-known/adcp-capabilities.json') {
+        return new Response(adcpCapsBody, {
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'public, max-age=300',
+          },
+        });
+      }
+
+      // RFC 9728 OAuth Protected Resource Metadata. SDK currently does NOT
+      // serve this (verified by curl → 404), so we synthesise it here.
+      // MCP clients that follow the spec poll this before /mcp to learn
+      // bearer scheme + documentation URL.
+      if (req.method === 'GET' && url.pathname === '/.well-known/oauth-protected-resource/mcp') {
+        return new Response(oauthResourceBody, {
           headers: {
             'Content-Type': 'application/json; charset=utf-8',
             'Cache-Control': 'public, max-age=300',
@@ -352,6 +382,12 @@ img{display:block;border:1px solid #ddd;background:#fff;}</style>
   log.info('well_known_proxy_started', {
     public_port: opts.publicPort,
     sdk_port: opts.sdkPort,
-    routes: ['/.well-known/agent.json', '/.well-known/healthz', '→ /mcp'],
+    routes: [
+      '/.well-known/agent.json',
+      '/.well-known/adcp-capabilities.json',
+      '/.well-known/oauth-protected-resource/mcp',
+      '/.well-known/healthz',
+      '→ /mcp',
+    ],
   });
 }

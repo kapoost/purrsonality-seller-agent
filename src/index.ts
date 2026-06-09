@@ -8,6 +8,7 @@ import { startHeartbeat } from './observability/heartbeat.ts';
 import { startMetricsFlusher } from './observability/metrics-store.ts';
 import { platform } from './platform.ts';
 import { idempotencyStore, mediaBuyStore, stateStore, taskRegistry } from './stores/index.ts';
+import { buildAdcpCapabilities, buildOAuthProtectedResource } from './well-known/adcp-capabilities.ts';
 import { buildAgentCard } from './well-known/agent-card.ts';
 import { startWellKnownProxy } from './well-known/proxy.ts';
 
@@ -63,12 +64,17 @@ serve(
     // immediately on connect, so the race was reliably reproducible there
     // even though local smoke (with a manual readiness wait) never saw it.
     onListening: () => {
+      const agentUrl = `${env.PUBLIC_BASE_URL}/mcp`;
       startWellKnownProxy({
         publicPort: env.PORT,
         sdkPort,
-        agentCard: buildAgentCard({
-          agentUrl: `${env.PUBLIC_BASE_URL}/mcp`,
-          version: '0.0.1',
+        agentCard: buildAgentCard({ agentUrl, version: '0.0.1' }),
+        adcpCapabilities: buildAdcpCapabilities({
+          agentUrl,
+          agentName: 'purrsonality-seller',
+        }),
+        oauthProtectedResource: buildOAuthProtectedResource({
+          resource: agentUrl,
         }),
       });
     },
