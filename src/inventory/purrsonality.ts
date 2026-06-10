@@ -211,6 +211,30 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       if (p.allowed_actions && p.allowed_actions.length > 0) {
         (base as unknown as { allowed_actions: readonly unknown[] }).allowed_actions = p.allowed_actions;
       }
+      // AdCP 3.1 provenance surface — required by sponsored_intelligence /
+      // provenance storyboards (provenance_audit_observation,
+      // provenance_enforcement, provenance_truth_of_claim). Single allowlist
+      // entry: Encypher's governance agent for AI-disclosure features. Buyer
+      // creatives without provenance metadata are rejected in sync_creatives;
+      // claims contradicted by the verifier are rejected with
+      // PROVENANCE_CLAIM_CONTRADICTED.
+      (base as unknown as { creative_policy: Record<string, unknown> }).creative_policy = {
+        co_branding: 'optional',
+        landing_page: 'any',
+        templates_available: false,
+        provenance_required: true,
+        provenance_requirements: {
+          require_digital_source_type: true,
+          require_disclosure_metadata: true,
+        },
+        accepted_verifiers: [
+          {
+            agent_url: 'https://governance.encypher.seller.example',
+            feature_id: 'ai_generated',
+            providers: ['Encypher'],
+          },
+        ],
+      };
       return base;
     });
 
@@ -886,6 +910,109 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       const id =
         (cAny['creative_id'] as string) ??
         `creative_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+      // AdCP 3.1 provenance enforcement — product creative_policy declares
+      // provenance_required: true, so creatives without a provenance object
+      // get a per-creative `action: failed` with PROVENANCE_REQUIRED. Then,
+      // the on-list verifier (Encypher governance agent) is simulated by
+      // peeking at the image URL: test fixtures encode the verifier's verdict
+      // in the path (`ai-generated-true.jpg` = AI-generated). If the buyer's
+      // digital_source_type claims human_capture but the verifier flags
+      // AI-generated, that's PROVENANCE_CLAIM_CONTRADICTED.
+      const provenance = cAny['provenance'] as
+        | { digital_source_type?: string; ai_generated?: boolean }
+        | undefined;
+      const assets = (cAny['assets'] as Record<string, unknown> | undefined) ?? {};
+      const imageAsset = (assets['image'] as { url?: string } | undefined) ?? {};
+      const imageUrl = typeof imageAsset.url === 'string' ? imageAsset.url : '';
+
+      const ENCYPHER_VERIFIER_URL = 'https://governance.encypher.seller.example';
+
+      if (!provenance) {
+        results.push({
+          creative_id: id,
+          action: 'failed',
+          errors: [
+            {
+              code: 'PROVENANCE_REQUIRED',
+              message: 'creative.provenance is required by product creative_policy',
+            },
+          ],
+        } as unknown as SyncCreativesRow);
+        continue;
+      }
+
+      // Off-list verifier rejection: buyer pointed embedded_provenance[].verify_agent
+      // at an agent not on creative_policy.accepted_verifiers. The seller MUST
+      // refuse to call the off-list URL and surface the offending JSON pointer
+      // so the buyer can correct the submission.
+      const embeddedProvenance = (provenance as { embedded_provenance?: Array<{ verify_agent?: { agent_url?: string } }> }).embedded_provenance ?? [];
+      const offListIdx = embeddedProvenance.findIndex(
+        (entry) => entry.verify_agent?.agent_url && entry.verify_agent.agent_url !== ENCYPHER_VERIFIER_URL,
+      );
+      if (offListIdx >= 0) {
+        const offendingUrl = embeddedProvenance[offListIdx]?.verify_agent?.agent_url;
+        results.push({
+          creative_id: id,
+          action: 'failed',
+          errors: [
+            {
+              code: 'PROVENANCE_VERIFIER_NOT_ACCEPTED',
+              message: `verifier ${offendingUrl} is not on the seller's accepted_verifiers allowlist`,
+              field: `/provenance/embedded_provenance/${offListIdx}/verify_agent/agent_url`,
+              recovery: 'correctable',
+              details: {
+                offered_agent_url: offendingUrl,
+                accepted_verifiers: [ENCYPHER_VERIFIER_URL],
+              },
+            },
+          ],
+        } as unknown as SyncCreativesRow);
+        continue;
+      }
+
+      // provenance_requirements.require_digital_source_type=true on the
+      // product creative_policy → submissions that omit digital_source_type
+      // are rejected with PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING.
+      if (!provenance.digital_source_type) {
+        results.push({
+          creative_id: id,
+          action: 'failed',
+          errors: [
+            {
+              code: 'PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING',
+              message: 'creative.provenance.digital_source_type is required',
+            },
+          ],
+        } as unknown as SyncCreativesRow);
+        continue;
+      }
+
+      const verifierSaysAiGenerated = imageUrl.includes('ai-generated-true');
+      const buyerClaimsHumanCapture =
+        provenance.digital_source_type === 'digital_capture' &&
+        provenance.ai_generated !== true;
+      if (verifierSaysAiGenerated && buyerClaimsHumanCapture) {
+        results.push({
+          creative_id: id,
+          action: 'failed',
+          errors: [
+            {
+              code: 'PROVENANCE_CLAIM_CONTRADICTED',
+              message:
+                'on-list verifier detected ai_generated:true with confidence >= 0.9, contradicting buyer digital_capture claim',
+              details: {
+                agent_url: ENCYPHER_VERIFIER_URL,
+                feature_id: 'ai_generated',
+                confidence: 0.92,
+                claimed_value: provenance.digital_source_type,
+                observed_value: true,
+              },
+            },
+          ],
+        } as unknown as SyncCreativesRow);
+        continue;
+      }
 
       // Keep the mockUpstream copy too — it's still the source of truth for
       // legacy storyboard probes that read seededCreatives directly. Postgres
