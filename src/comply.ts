@@ -1,4 +1,5 @@
 import type { ComplyControllerConfig } from '@adcp/sdk/testing';
+import type { SimulationSuccess, StateTransitionSuccess } from '@adcp/sdk';
 import { mockUpstream } from './upstream/mock.ts';
 import { PUBLISHER } from './config/purrsonality.ts';
 
@@ -124,6 +125,19 @@ export const complyTest: ComplyControllerConfig = {
       };
     },
     media_buy_status: async (params) => {
+      // AdCP 3.1 deterministic_testing — terminal states (completed, canceled,
+      // rejected) reject downstream transitions with INVALID_TRANSITION.
+      // The runner exercises this by force_completed first, then asks the
+      // controller to walk back to active and expects the controller to refuse.
+      const existing = mockUpstream.getOrder(params.media_buy_id);
+      const terminalStates = new Set(['completed', 'canceled', 'rejected']);
+      if (existing && terminalStates.has(existing.status) && !terminalStates.has(mockStatus(params.status))) {
+        return {
+          success: false,
+          error: 'INVALID_TRANSITION',
+          message: `cannot transition from terminal state ${existing.status} to ${params.status}`,
+        } as unknown as StateTransitionSuccess;
+      }
       const previous = mockUpstream.forceStatus(params.media_buy_id, mockStatus(params.status));
       if (previous === undefined) {
         mockUpstream.seedOrder({
@@ -194,6 +208,30 @@ export const complyTest: ComplyControllerConfig = {
           reported_spend: params.reported_spend,
         },
       };
+    },
+    budget_spend: async (params) => {
+      // AdCP 3.1 deterministic_testing — push the buy to N% of its budget so
+      // downstream pacing / depletion assertions see a deterministic delivery
+      // row. We push spend (and a proportional impression count at the order's
+      // floor CPM) directly through addDelivery so the same row surfaces in
+      // get_media_buy_delivery.
+      const order = mockUpstream.getOrder(params.media_buy_id);
+      const pct = (params.spend_percentage ?? 0) / 100;
+      const targetSpend = (order?.budget ?? 0) * pct;
+      const impressions = Math.round((targetSpend / 1.5) * 1000); // floor CPM 1.5
+      mockUpstream.addDelivery(params.media_buy_id, {
+        spend: targetSpend,
+        impressions,
+        currency: order?.currency ?? 'USD',
+      });
+      return {
+        success: true,
+        simulated: {
+          media_buy_id: params.media_buy_id,
+          spend_percentage: params.spend_percentage,
+          spend: targetSpend,
+        },
+      } as unknown as SimulationSuccess;
     },
   },
 };
