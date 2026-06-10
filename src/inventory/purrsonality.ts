@@ -841,6 +841,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           valid_actions: validActionsForStatus(wireStatus),
           ...(availableActions.length > 0 && { available_actions: availableActions }),
           ...(o.context && Object.keys(o.context).length > 0 && { context: o.context }),
+          // AdCP 3.1 dependency_impairment baseline: `health: 'ok'` and an
+          // empty impairments[] until creative_status / upstream_unavailable
+          // forces an impaired transition. Purrsonality doesn't track
+          // resource-level health internally; the baseline is sufficient for
+          // current storyboards. impaired transitions would need creative
+          // status tracking before they could fire here.
+          health: 'ok',
+          impairments: [],
           // Legacy-shape packages (seeded by 3.1 package_correlation_legacy_fallback)
           // are emitted verbatim — package_id + context only, no product_id —
           // so buyers exercising the compatibility path can correlate by
