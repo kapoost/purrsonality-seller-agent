@@ -47,6 +47,11 @@ test.describe('admin dashboard UI', () => {
             image: { asset_type: 'image', url: 'https://example.com/x.png', width: 300, height: 250 },
             click_url: { asset_type: 'url', url: 'https://example.com/' },
           },
+          provenance: {
+            digital_source_type: 'digital_capture',
+            declared_by: { role: 'agency' },
+            disclosure: { required: false },
+          },
         }],
       },
       TEST_ADMIN_TOKEN,  // ADCP_AUTH_TOKEN principal = live (non-sandbox)
@@ -89,6 +94,11 @@ test.describe('admin dashboard UI', () => {
           assets: {
             image: { asset_type: 'image', url: 'https://purrsonality.pages.dev/og/angel.png', width: 300, height: 250 },
             click_url: { asset_type: 'url', url: 'https://example.com/' },
+          },
+          provenance: {
+            digital_source_type: 'digital_capture',
+            declared_by: { role: 'agency' },
+            disclosure: { required: false },
           },
         }],
       },

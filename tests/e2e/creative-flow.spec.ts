@@ -26,6 +26,15 @@ async function syncOne(
           image: { asset_type: 'image', url: 'https://example.com/x.png', width: 300, height: 250 },
           click_url: { asset_type: 'url', url: 'https://example.com/' },
         },
+        // Provenance field required by Purrsonality's creative_policy
+        // (provenance_required: true, plus digital_source_type and disclosure
+        // metadata gates). Test creatives are buyer-photographed display
+        // banners — digital_capture with no AI disclosure obligation.
+        provenance: {
+          digital_source_type: 'digital_capture',
+          declared_by: { role: 'agency' },
+          disclosure: { required: false },
+        },
         ...extra,
       }],
     },

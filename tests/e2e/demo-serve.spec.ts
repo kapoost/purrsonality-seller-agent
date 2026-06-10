@@ -35,6 +35,11 @@ test.describe('demo serve endpoints', () => {
             image: { asset_type: 'image', url: 'https://example.com/banner.png', width: 300, height: 250 },
             click_url: { asset_type: 'url', url: 'https://example.com/landing' },
           },
+          provenance: {
+            digital_source_type: 'digital_capture',
+            declared_by: { role: 'agency' },
+            disclosure: { required: false },
+          },
         }],
       },
       TEST_SANDBOX_TOKEN,
@@ -70,6 +75,11 @@ test.describe('demo serve endpoints', () => {
             image: { asset_type: 'image', url: 'https://purrsonality.pages.dev/og/angel.png', width: 300, height: 250 },
             click_url: { asset_type: 'url', url: 'https://example.com/landing' },
           },
+          provenance: {
+            digital_source_type: 'digital_capture',
+            declared_by: { role: 'agency' },
+            disclosure: { required: false },
+          },
         }],
       },
       TEST_SANDBOX_TOKEN,
@@ -98,6 +108,11 @@ test.describe('demo serve endpoints', () => {
           assets: {
             image: { asset_type: 'image', url: 'https://example.com/test.png', width: 300, height: 250 },
             click_url: { asset_type: 'url', url: 'https://example.com/landing' },
+          },
+          provenance: {
+            digital_source_type: 'digital_capture',
+            declared_by: { role: 'agency' },
+            disclosure: { required: false },
           },
         }],
       },
@@ -136,6 +151,11 @@ test.describe('demo serve endpoints', () => {
           assets: {
             image: { asset_type: 'image', url: 'https://example.com/x.png', width: 300, height: 250 },
             click_url: { asset_type: 'url', url: landing },
+          },
+          provenance: {
+            digital_source_type: 'digital_capture',
+            declared_by: { role: 'agency' },
+            disclosure: { required: false },
           },
         }],
       },
