@@ -1138,6 +1138,15 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       });
     }
 
+    // Per AdCP 3.1 filters.creative_ids — when the buyer asks for specific
+    // creatives by ID (e.g. creative_fate_after_cancellation, creative_lifecycle),
+    // narrow the row set before pagination.
+    const filters = (req as { filters?: { creative_ids?: string[] } }).filters;
+    if (filters?.creative_ids && filters.creative_ids.length > 0) {
+      const wanted = new Set(filters.creative_ids);
+      normalized = normalized.filter((c) => wanted.has(c.creative_id));
+    }
+
     const pageSize = Math.max(1, Math.min(100, r.pagination?.max_results ?? 100));
     const offset = Number.parseInt(r.pagination?.cursor ?? '0', 10) || 0;
     const page = normalized.slice(offset, offset + pageSize);
