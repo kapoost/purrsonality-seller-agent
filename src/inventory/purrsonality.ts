@@ -972,8 +972,10 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       }
 
       // provenance_requirements.require_digital_source_type=true on the
-      // product creative_policy → submissions that omit digital_source_type
-      // are rejected with PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING.
+      // product creative_policy → DST check runs before disclosure so that
+      // a fully-empty provenance object surfaces the DST error, not the
+      // downstream disclosure error (storyboards exercise both paths
+      // independently).
       if (!provenance.digital_source_type) {
         results.push({
           creative_id: id,
@@ -982,6 +984,31 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
             {
               code: 'PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING',
               message: 'creative.provenance.digital_source_type is required',
+              field: '/provenance/digital_source_type',
+              recovery: 'correctable',
+            },
+          ],
+        } as unknown as SyncCreativesRow);
+        continue;
+      }
+
+      // provenance_requirements.require_disclosure_metadata=true on the
+      // product creative_policy → submissions that omit disclosure are
+      // rejected with PROVENANCE_DISCLOSURE_MISSING.
+      const provenanceWithDisclosure = provenance as {
+        digital_source_type?: string;
+        disclosure?: { required?: boolean; jurisdictions?: unknown[] };
+      };
+      if (!provenanceWithDisclosure.disclosure) {
+        results.push({
+          creative_id: id,
+          action: 'failed',
+          errors: [
+            {
+              code: 'PROVENANCE_DISCLOSURE_MISSING',
+              message: 'creative.provenance.disclosure is required',
+              field: '/provenance/disclosure',
+              recovery: 'correctable',
             },
           ],
         } as unknown as SyncCreativesRow);
