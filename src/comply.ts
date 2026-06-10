@@ -78,7 +78,22 @@ export const complyTest: ComplyControllerConfig = {
         budget?: number;
         currency?: string;
         product_ids?: string[];
+        // Legacy-shape packages (3.1 package_correlation_legacy_fallback) —
+        // package_id + buyer_ref, no product_id. Runners that seed these
+        // expect get_media_buys to emit them verbatim so buyers can correlate
+        // via context.buyer_ref alone.
+        packages?: Array<{
+          package_id?: string;
+          product_id?: string;
+          context?: { buyer_ref?: string; correlation_id?: string };
+        }>;
       };
+      const legacyPackages = (fixture.packages ?? [])
+        .filter((p) => p.package_id && !p.product_id)
+        .map((p) => ({
+          package_id: p.package_id!,
+          ...(p.context && Object.keys(p.context).length > 0 && { context: p.context }),
+        }));
       mockUpstream.seedOrder({
         media_buy_id: params.media_buy_id,
         network_code: PUBLISHER.network_code,
@@ -87,6 +102,7 @@ export const complyTest: ComplyControllerConfig = {
         budget: fixture.budget ?? 0,
         currency: fixture.currency ?? 'USD',
         ...(fixture.status && { status: mockStatus(fixture.status) }),
+        ...(legacyPackages.length > 0 && { legacy_packages: legacyPackages }),
       });
     },
   },

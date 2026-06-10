@@ -799,14 +799,30 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     } as unknown as GetMediaBuyDeliveryResponse;
   },
 
-  async getMediaBuys(_req: GetMediaBuysRequest, ctx): Promise<GetMediaBuysResponse> {
+  async getMediaBuys(req: GetMediaBuysRequest, ctx): Promise<GetMediaBuysResponse> {
     const account = ctx.account;
     if (!account) {
       return { media_buys: [], pagination: { has_more: false } } as unknown as GetMediaBuysResponse;
     }
-    const orders = [...mockUpstream.listOrders(account.ctx_metadata.network_code)].sort(
-      (a, b) => (b.created_at > a.created_at ? 1 : b.created_at < a.created_at ? -1 : 0),
-    );
+    const r = (req ?? {}) as { media_buy_ids?: string[] };
+    const wantedIds = r.media_buy_ids && r.media_buy_ids.length > 0 ? new Set(r.media_buy_ids) : null;
+    const allOrders = [...mockUpstream.listOrders(account.ctx_metadata.network_code)];
+    // Seeded legacy buys are network-keyed to PUBLISHER too — include any
+    // sandbox-seeded order whose id matches the requested list even when the
+    // network filter would otherwise skip it (e.g. runner seeded against
+    // sandbox account, buyer reads against the same brand). 3.1 storyboard
+    // package_correlation_legacy_fallback depends on this lookup-by-id path.
+    if (wantedIds) {
+      for (const id of wantedIds) {
+        const o = mockUpstream.getOrder(id);
+        if (o && !allOrders.find((x) => x.order_id === id)) {
+          allOrders.push(o);
+        }
+      }
+    }
+    const orders = allOrders
+      .filter((o) => (wantedIds ? wantedIds.has(o.order_id) : true))
+      .sort((a, b) => (b.created_at > a.created_at ? 1 : b.created_at < a.created_at ? -1 : 0));
     return {
       pagination: { has_more: false, total_count: orders.length },
       media_buys: orders.map((o) => {
@@ -825,7 +841,20 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           valid_actions: validActionsForStatus(wireStatus),
           ...(availableActions.length > 0 && { available_actions: availableActions }),
           ...(o.context && Object.keys(o.context).length > 0 && { context: o.context }),
-          packages: o.product_ids.map((pid) => {
+          // Legacy-shape packages (seeded by 3.1 package_correlation_legacy_fallback)
+          // are emitted verbatim — package_id + context only, no product_id —
+          // so buyers exercising the compatibility path can correlate by
+          // buyer_ref. Otherwise build packages from product_ids[].
+          packages: o.legacy_packages && o.legacy_packages.length > 0
+            ? o.legacy_packages.map((lp) => ({
+                package_id: lp.package_id,
+                budget: 0,
+                pricing_option_id: 'po_cpm_default',
+                pacing: 'even',
+                status: o.status === 'completed' || o.status === 'canceled' ? 'completed' : 'active',
+                ...(lp.context && Object.keys(lp.context).length > 0 && { context: lp.context }),
+              }))
+            : o.product_ids.map((pid) => {
             const overlay = o.package_overlays?.[pid];
             const pkgCtx = o.package_contexts?.[pid];
             return {

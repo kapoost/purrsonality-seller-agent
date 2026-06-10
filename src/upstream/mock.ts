@@ -19,6 +19,11 @@ export interface MockOrder {
   // check_buy_status, pending_creatives_to_start/get_media_buy_after_sync).
   context?: { correlation_id?: string; buyer_ref?: string };
   package_contexts?: Record<string, { correlation_id?: string; buyer_ref?: string }>;
+  // Legacy compatibility (3.1 package_correlation_legacy_fallback): packages
+  // without product_id, seeded by the compliance runner to model mixed-seller
+  // populations. When present, getMediaBuys emits these instead of product-id
+  // packages so buyers can correlate by package context.buyer_ref alone.
+  legacy_packages?: Array<{ package_id: string; context?: { buyer_ref?: string; correlation_id?: string } }>;
 }
 
 export interface PackageOverlay {
@@ -248,6 +253,7 @@ export const mockUpstream = {
     budget?: number;
     currency?: string;
     status?: MockOrder['status'];
+    legacy_packages?: Array<{ package_id: string; context?: { buyer_ref?: string; correlation_id?: string } }>;
   }): MockOrder {
     const existing = orders.get(args.media_buy_id);
     const order: MockOrder = existing ?? {
@@ -262,6 +268,9 @@ export const mockUpstream = {
       created_at: new Date().toISOString(),
     };
     if (args.status) order.status = args.status;
+    if (args.legacy_packages && args.legacy_packages.length > 0) {
+      order.legacy_packages = args.legacy_packages;
+    }
     orders.set(args.media_buy_id, order);
     return order;
   },
