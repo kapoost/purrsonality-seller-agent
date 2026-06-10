@@ -218,6 +218,23 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         publisher_domain: PUBLISHER.adcp_publisher,
         channels: [p.channel],
         ctx_metadata: { ad_unit_ids: [...p.ad_unit_ids] },
+        // Vendor metrics — attention measurement via attentionvendor.example
+        // (the AdCP test catalog). Lets vendor_metric_accountability storyboards
+        // filter on required_vendor_metrics and find this product.
+        reporting_capabilities: {
+          available_reporting_frequencies: ['hourly', 'daily'],
+          expected_delay_minutes: 60,
+          timezone: 'UTC',
+          supports_webhooks: false,
+          available_metrics: ['impressions', 'spend', 'clicks'],
+          date_range_support: 'date_range',
+          vendor_metrics: [
+            {
+              vendor: { domain: 'attentionvendor.example' },
+              metric_id: 'attention_score',
+            },
+          ],
+        } as unknown as Parameters<typeof buildProduct>[0]['reporting_capabilities'],
       });
       if (p.allowed_actions && p.allowed_actions.length > 0) {
         (base as unknown as { allowed_actions: readonly unknown[] }).allowed_actions = p.allowed_actions;
@@ -798,6 +815,20 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
               pricing_model: 'cpm' as const,
               rate: 1.5,
               pacing_index: pacingIndex,
+              // Vendor metric values — keyed by (vendor.domain, metric_id) per
+              // delivery-metrics.json. Representative attention score per
+              // measurable impression; matches the vendor_metrics declared
+              // on the product's reporting_capabilities.
+              vendor_metric_values: [
+                {
+                  vendor: { domain: 'attentionvendor.example' },
+                  metric_id: 'attention_score',
+                  value: 6.4,
+                  // Coverage denominator (delivery-metrics.json) — lets buyers
+                  // compute vendor measurement coverage = measurable / total.
+                  measurable_impressions: Math.round(impressions * 0.85),
+                },
+              ],
             }))
           : [],
       };
