@@ -761,6 +761,22 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       aggSpend += spend;
       aggClicks += clicks;
 
+      // AdCP 3.1 viewability block — 97% of display impressions are
+      // viewability-measurable on the result-page slot (single iframe, known
+      // dimensions). viewed_seconds is the average in-view duration per
+      // measurable impression; for a static display unit we report a
+      // representative 2.0s and a viewable_rate consistent with the IAB MRC
+      // 50%/1s standard the integration would assert against.
+      const measurableImpressions = Math.round(impressions * 0.97);
+      const viewableImpressions = Math.round(measurableImpressions * 0.74);
+      const viewability = {
+        measurable_impressions: measurableImpressions,
+        viewable_impressions: viewableImpressions,
+        viewable_rate: measurableImpressions > 0 ? viewableImpressions / measurableImpressions : 0,
+        viewed_seconds: 2.0,
+        standard: 'mrc',
+      };
+
       return {
         media_buy_id: id,
         status: order ? mockToWireStatus(order.status) : 'active',
@@ -769,6 +785,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           spend,
           clicks,
           ...(impressions > 0 && { ctr: clicks / impressions }),
+          viewability,
         },
         by_package: order
           ? order.product_ids.map((pid) => ({
