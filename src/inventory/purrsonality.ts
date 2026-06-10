@@ -254,6 +254,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         provenance_requirements: {
           require_digital_source_type: true,
           require_disclosure_metadata: true,
+          require_embedded_provenance: true,
         },
         accepted_verifiers: [
           {
@@ -1117,6 +1118,36 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
               code: 'PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING',
               message: 'creative.provenance.digital_source_type is required',
               field: '/provenance/digital_source_type',
+              recovery: 'correctable',
+            },
+          ],
+        } as unknown as SyncCreativesRow);
+        continue;
+      }
+
+      // provenance_requirements.require_embedded_provenance=true on the
+      // product creative_policy → submissions whose provenance lacks the
+      // embedded_provenance[] block are rejected with PROVENANCE_EMBEDDED_MISSING.
+      // Per docs/governance/creative/provenance-verification, the field-level
+      // check fires once digital_source_type is present (so the buyer has
+      // already declared *what* the asset is — embedded metadata is the
+      // independently-verifiable corroboration).
+      const provenanceWithEmbedded = provenance as {
+        digital_source_type?: string;
+        embedded_provenance?: unknown[];
+      };
+      if (
+        !Array.isArray(provenanceWithEmbedded.embedded_provenance) ||
+        provenanceWithEmbedded.embedded_provenance.length === 0
+      ) {
+        results.push({
+          creative_id: id,
+          action: 'failed',
+          errors: [
+            {
+              code: 'PROVENANCE_EMBEDDED_MISSING',
+              message: 'creative.provenance.embedded_provenance is required',
+              field: '/provenance/embedded_provenance',
               recovery: 'correctable',
             },
           ],

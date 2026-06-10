@@ -34,6 +34,7 @@ async function syncOne(
           digital_source_type: 'digital_capture',
           declared_by: { role: 'agency' },
           disclosure: { required: false },
+          embedded_provenance: [{ method: 'provenance_markers', provider: 'Encypher', verify_agent: { agent_url: 'https://governance.encypher.seller.example', feature_id: 'encypher.markers_present_v2' } }],
         },
         ...extra,
       }],
