@@ -157,7 +157,14 @@ function validActionsForStatus(status: MediaBuyStatus): MediaBuyStatus extends n
   }
 }
 
-function buildPackageResponse(orderId: string, productId: string, budget: number, pricingOptionId: string, hasCreatives: boolean): Package {
+function buildPackageResponse(
+  orderId: string,
+  productId: string,
+  budget: number,
+  pricingOptionId: string,
+  hasCreatives: boolean,
+  context?: { buyer_ref?: string; correlation_id?: string },
+): Package {
   return {
     package_id: `${orderId}_${productId}`,
     product_id: productId,
@@ -165,6 +172,10 @@ function buildPackageResponse(orderId: string, productId: string, budget: number
     pricing_option_id: pricingOptionId,
     pacing: 'even',
     status: hasCreatives ? 'active' : 'pending_creatives',
+    // Per AdCP 3.1 storyboards (pending_creatives_to_start, package_correlation_*),
+    // package context echoes the buyer-supplied correlation/buyer_ref so the
+    // buyer SDK can stitch package-level outcomes back to its line-item ledger.
+    ...(context && Object.keys(context).length > 0 && { context }),
   } as unknown as Package;
 }
 
@@ -517,6 +528,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           pkg.budget,
           pkg.pricing_option_id ?? 'po_cpm_default',
           hasAnyCreatives,
+          (pkg as { context?: { buyer_ref?: string; correlation_id?: string } }).context,
         ),
       ),
     } as unknown as CreateMediaBuySuccess;
