@@ -87,8 +87,22 @@ serve(
         ...(env.ADCP_ADDIE_TOKEN && {
           [env.ADCP_ADDIE_TOKEN]: { principal: 'purrsonality-addie-test' },
         }),
-        'demo-acme-outdoor-v1': { principal: 'compliance-runner' },
-        'demo-acme-outdoor-live-v1': { principal: 'compliance-runner-live' },
+      },
+      // AdCP test-kit convention (per `compliance/cache/<v>/test-kits/<kit>.yaml`):
+      // sellers SHOULD accept any Bearer matching the kit's `demo-<kit>-v<N>`
+      // prefix so the version suffix can rotate without breaking conformance
+      // runs. security_baseline/assert_mechanism sends a random-invalid Bearer
+      // alongside the valid one — accepting a permissive prefix would falsely
+      // pass that probe, so the regex is anchored to the canonical version
+      // suffix (`v<digits>` or `live-v<digits>`).
+      verify: (token) => {
+        if (/^demo-acme-outdoor-live-v\d+$/.test(token)) {
+          return { principal: 'compliance-runner-live' };
+        }
+        if (/^demo-acme-outdoor-v\d+$/.test(token)) {
+          return { principal: 'compliance-runner' };
+        }
+        return null;
       },
     }),
   },
