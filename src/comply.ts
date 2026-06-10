@@ -130,6 +130,37 @@ export const complyTest: ComplyControllerConfig = {
     },
   },
 
+  // Sandbox-only audit log query. Storyboards that accept a directed
+  // carve-out (provenance with human_oversight directed/edited + disclosure
+  // required:false) verify after-the-fact that the seller recorded the
+  // observation. We always return one canonical entry — no real audit log
+  // is wired in this seller; the controller surface is enough for compliance.
+  queryProvenanceAuditObservations: async (params) => {
+    // Storyboards exercise two carve-out flavours by encoding the oversight
+    // mode in the creative_id (`_directed_` vs `_edited_`). The reply mirrors
+    // whichever the buyer asked for so the audit reflects the real submission.
+    const oversight = /_edited_/.test(params.creative_id) ? 'edited' : 'directed';
+    return {
+      success: true,
+      creative_id: params.creative_id,
+      audit_observations: [
+        {
+          code: 'OVERSIGHT_DISCLOSURE_CARVEOUT_CLAIMED',
+          severity: 'audit-worthy',
+          recovery: 'informational',
+          details: {
+            agent_url: 'https://governance.encypher.seller.example',
+            feature_id: 'ai_generated',
+            claimed_value: {
+              human_oversight: oversight,
+              disclosure_required: false,
+            },
+          },
+        },
+      ],
+    };
+  },
+
   simulate: {
     delivery: async (params) => {
       mockUpstream.addDelivery(params.media_buy_id, {
