@@ -1,7 +1,18 @@
 import type { ComplyControllerConfig } from '@adcp/sdk/testing';
-import type { SimulationSuccess, StateTransitionSuccess } from '@adcp/sdk';
 import { mockUpstream } from './upstream/mock.ts';
 import { PUBLISHER } from './config/purrsonality.ts';
+
+// `queryProvenanceAuditObservations` is an extension scenario landing in SDK
+// 9.x (adcp#2186); the 7.11.1 typed config doesn't expose it yet. We attach
+// the adapter via a widened type so the field rides through to the SDK
+// dispatcher at runtime (which routes on scenario name, not on declared
+// field) without making strict-tsc trip in CI. Drop the cast when we bump.
+type ComplyControllerConfigWithProvenanceQuery = ComplyControllerConfig & {
+  queryProvenanceAuditObservations?: (
+    params: { creative_id: string; [k: string]: unknown },
+    ctx: { input: Record<string, unknown> },
+  ) => Promise<unknown> | unknown;
+};
 
 function mockStatus(wire: string): 'confirmed' | 'delivering' | 'paused' | 'completed' {
   if (wire === 'paused') return 'paused';
@@ -10,7 +21,7 @@ function mockStatus(wire: string): 'confirmed' | 'delivering' | 'paused' | 'comp
   return 'confirmed';
 }
 
-export const complyTest: ComplyControllerConfig = {
+export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
   sandboxGate: (input) => {
     const account = (input as { account?: { sandbox?: boolean } }).account;
     if (account?.sandbox === false) return false;
@@ -136,7 +147,7 @@ export const complyTest: ComplyControllerConfig = {
           success: false,
           error: 'INVALID_TRANSITION',
           message: `cannot transition from terminal state ${existing.status} to ${params.status}`,
-        } as unknown as StateTransitionSuccess;
+        } as unknown as Awaited<ReturnType<NonNullable<NonNullable<ComplyControllerConfig['force']>['media_buy_status']>>>;
       }
       const previous = mockUpstream.forceStatus(params.media_buy_id, mockStatus(params.status));
       if (previous === undefined) {
@@ -215,11 +226,12 @@ export const complyTest: ComplyControllerConfig = {
       // row. We push spend (and a proportional impression count at the order's
       // floor CPM) directly through addDelivery so the same row surfaces in
       // get_media_buy_delivery.
-      const order = mockUpstream.getOrder(params.media_buy_id);
+      const mediaBuyId = params.media_buy_id ?? '';
+      const order = mockUpstream.getOrder(mediaBuyId);
       const pct = (params.spend_percentage ?? 0) / 100;
       const targetSpend = (order?.budget ?? 0) * pct;
       const impressions = Math.round((targetSpend / 1.5) * 1000); // floor CPM 1.5
-      mockUpstream.addDelivery(params.media_buy_id, {
+      mockUpstream.addDelivery(mediaBuyId, {
         spend: targetSpend,
         impressions,
         currency: order?.currency ?? 'USD',
@@ -227,11 +239,11 @@ export const complyTest: ComplyControllerConfig = {
       return {
         success: true,
         simulated: {
-          media_buy_id: params.media_buy_id,
+          media_buy_id: mediaBuyId,
           spend_percentage: params.spend_percentage,
           spend: targetSpend,
         },
-      } as unknown as SimulationSuccess;
+      } as unknown as Awaited<ReturnType<NonNullable<NonNullable<ComplyControllerConfig['simulate']>['budget_spend']>>>;
     },
   },
 };
