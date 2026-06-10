@@ -482,6 +482,15 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       }
     }
 
+    const buyerContext = (req as { context?: { correlation_id?: string; buyer_ref?: string } }).context;
+    const packageContexts: Record<string, { correlation_id?: string; buyer_ref?: string }> = {};
+    for (const pkg of packages) {
+      const pkgCtx = (pkg as { context?: { correlation_id?: string; buyer_ref?: string } }).context;
+      if (pkgCtx && Object.keys(pkgCtx).length > 0) {
+        packageContexts[pkg.product_id] = pkgCtx;
+      }
+    }
+
     const order = mockUpstream.createOrder({
       network_code: account.ctx_metadata.network_code,
       advertiser_id: account.id,
@@ -496,6 +505,8 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       client_request_id: req.idempotency_key,
       package_budgets: packageBudgets,
       status: hasAnyCreatives ? 'confirmed' : 'pending_creatives',
+      ...(buyerContext && Object.keys(buyerContext).length > 0 && { context: buyerContext }),
+      ...(Object.keys(packageContexts).length > 0 && { package_contexts: packageContexts }),
     });
 
     for (const [productId, overlay] of overlayMap.entries()) {
@@ -813,8 +824,10 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           revision: 1,
           valid_actions: validActionsForStatus(wireStatus),
           ...(availableActions.length > 0 && { available_actions: availableActions }),
+          ...(o.context && Object.keys(o.context).length > 0 && { context: o.context }),
           packages: o.product_ids.map((pid) => {
             const overlay = o.package_overlays?.[pid];
+            const pkgCtx = o.package_contexts?.[pid];
             return {
               package_id: `${o.order_id}_${pid}`,
               product_id: pid,
@@ -828,6 +841,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
                   ...(overlay.collection_list && { collection_list: overlay.collection_list }),
                 },
               }),
+              ...(pkgCtx && Object.keys(pkgCtx).length > 0 && { context: pkgCtx }),
             };
           }),
         };

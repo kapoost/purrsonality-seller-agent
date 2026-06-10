@@ -15,6 +15,10 @@ export interface MockOrder {
   client_request_id?: string;
   package_overlays?: Record<string, PackageOverlay>;
   package_budgets?: Record<string, number>;
+  // Buyer-supplied context echoed back by get_media_buys (3.1 storyboards
+  // check_buy_status, pending_creatives_to_start/get_media_buy_after_sync).
+  context?: { correlation_id?: string; buyer_ref?: string };
+  package_contexts?: Record<string, { correlation_id?: string; buyer_ref?: string }>;
 }
 
 export interface PackageOverlay {
@@ -133,6 +137,8 @@ export const mockUpstream = {
     client_request_id?: string;
     package_budgets?: Record<string, number>;
     status?: MockOrder['status'];
+    context?: { correlation_id?: string; buyer_ref?: string };
+    package_contexts?: Record<string, { correlation_id?: string; buyer_ref?: string }>;
   }): MockOrder {
     if (args.client_request_id) {
       const existing = requestKey.get(args.client_request_id);
@@ -156,6 +162,10 @@ export const mockUpstream = {
       created_at: new Date().toISOString(),
       ...(args.client_request_id !== undefined && { client_request_id: args.client_request_id }),
       ...(args.package_budgets && { package_budgets: { ...args.package_budgets } }),
+      ...(args.context && Object.keys(args.context).length > 0 && { context: { ...args.context } }),
+      ...(args.package_contexts && Object.keys(args.package_contexts).length > 0 && {
+        package_contexts: { ...args.package_contexts },
+      }),
     };
 
     orders.set(order.order_id, order);
