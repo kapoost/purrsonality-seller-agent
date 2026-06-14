@@ -20,6 +20,7 @@
 // not inspect Authorization headers.
 
 import { log } from '../observability/logger.ts';
+import { publicJwks } from '../signing.ts';
 import { creativesStore } from '../stores/creatives.ts';
 import { impressionsStore } from '../stores/impressions.ts';
 import { mockUpstream } from '../upstream/mock.ts';
@@ -71,6 +72,7 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
   const cardBody = JSON.stringify(opts.agentCard, null, 2);
   const adcpCapsBody = JSON.stringify(opts.adcpCapabilities, null, 2);
   const oauthResourceBody = JSON.stringify(opts.oauthProtectedResource, null, 2);
+  const jwksBody = JSON.stringify(publicJwks, null, 2);
   const startedAt = Date.now();
 
   server = Bun.serve({
@@ -109,6 +111,19 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
         return new Response(oauthResourceBody, {
           headers: {
             'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'public, max-age=300',
+          },
+        });
+      }
+
+      // Public JWKS for the signed-requests specialism. RFC 9421 buyers
+      // resolving our keyids fetch this before signing — the SDK's
+      // verifier consumes the same key set via StaticJwksResolver, so
+      // wire-side public truth and verifier-side acceptance stay aligned.
+      if (req.method === 'GET' && url.pathname === '/.well-known/jwks.json') {
+        return new Response(jwksBody, {
+          headers: {
+            'Content-Type': 'application/jwk-set+json',
             'Cache-Control': 'public, max-age=300',
           },
         });
@@ -386,6 +401,7 @@ img{display:block;border:1px solid #ddd;background:#fff;}</style>
       '/.well-known/agent.json',
       '/.well-known/adcp-capabilities.json',
       '/.well-known/oauth-protected-resource/mcp',
+      '/.well-known/jwks.json',
       '/.well-known/healthz',
       '→ /mcp',
     ],

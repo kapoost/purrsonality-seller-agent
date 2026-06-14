@@ -7,6 +7,7 @@ import { log } from './observability/logger.ts';
 import { startHeartbeat } from './observability/heartbeat.ts';
 import { startMetricsFlusher } from './observability/metrics-store.ts';
 import { platform } from './platform.ts';
+import { jwksResolver, replayStore, revocationStore, requestSigningCapability } from './signing.ts';
 import { idempotencyStore, mediaBuyStore, stateStore, taskRegistry } from './stores/index.ts';
 import { buildAdcpCapabilities, buildOAuthProtectedResource } from './well-known/adcp-capabilities.ts';
 import { buildAgentCard } from './well-known/agent-card.ts';
@@ -49,6 +50,17 @@ serve(
           account?: { id?: string };
         };
         return ctxAny.authInfo?.clientId ?? ctxAny.account?.id ?? 'anonymous';
+      },
+      // RFC 9421 verifier auto-wires here when 'signed-requests' is in
+      // platform.capabilities.specialisms; SDK mounts preTransport ahead
+      // of MCP dispatch. Buyers signing mutating tools land in the
+      // verifier before reaching our handlers.
+      signedRequests: {
+        jwks: jwksResolver,
+        replayStore,
+        revocationStore,
+        required_for: requestSigningCapability.required_for,
+        covers_content_digest: requestSigningCapability.covers_content_digest,
       },
       complyTest,
     });

@@ -22,6 +22,8 @@ export const SERVER_URLS = {
   mcp: `http://127.0.0.1:${PORT}/mcp`,
   adminBase: `http://127.0.0.1:${ADMIN_PORT}`,
   agentCard: `http://127.0.0.1:${PORT}/.well-known/agent.json`,
+  adcpCapabilities: `http://127.0.0.1:${PORT}/.well-known/adcp-capabilities.json`,
+  jwks: `http://127.0.0.1:${PORT}/.well-known/jwks.json`,
   healthz: `http://127.0.0.1:${PORT}/.well-known/healthz`,
 };
 

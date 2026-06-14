@@ -14,6 +14,39 @@ test.describe('demo serve endpoints', () => {
     expect(health.status).toBe(200);
   });
 
+  test('adcp-capabilities.json declares bills_through_adcp: false', async () => {
+    const res = await fetch(SERVER_URLS.adcpCapabilities);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { bills_through_adcp?: unknown; agent?: { role?: string } };
+    expect(body.agent?.role).toBe('seller');
+    expect(body.bills_through_adcp).toBe(false);
+  });
+
+  test('signed-requests specialism: jwks + capability advertised', async () => {
+    const caps = await fetch(SERVER_URLS.adcpCapabilities);
+    const capsBody = await caps.json() as {
+      specialisms?: string[];
+      request_signing?: { supported?: boolean; required_for?: string[]; covers_content_digest?: string };
+    };
+    expect(capsBody.specialisms).toContain('signed-requests');
+    expect(capsBody.request_signing?.supported).toBe(true);
+    expect(capsBody.request_signing?.required_for).toEqual(
+      expect.arrayContaining(['create_media_buy', 'update_media_buy']),
+    );
+
+    const jwks = await fetch(SERVER_URLS.jwks);
+    expect(jwks.status).toBe(200);
+    expect(jwks.headers.get('content-type')).toContain('jwk-set+json');
+    const jwksBody = await jwks.json() as { keys?: Array<{ kid?: string; adcp_use?: string }> };
+    const kids = (jwksBody.keys ?? []).map((k) => k.kid);
+    expect(kids).toContain('test-ed25519-2026');
+    expect(kids).toContain('test-es256-2026');
+    expect(kids).toContain('test-revoked-2026');
+    for (const k of jwksBody.keys ?? []) {
+      expect(k.adcp_use).toBe('request-signing');
+    }
+  });
+
   test('/preview/<nonexistent> returns 404', async () => {
     const res = await fetch(`${SERVER_URLS.publicBase}/preview/nope_does_not_exist_${Date.now()}`);
     expect(res.status).toBe(404);

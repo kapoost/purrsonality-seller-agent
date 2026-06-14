@@ -4,7 +4,7 @@ import { sales } from './handlers/sales.ts';
 
 export const platform = definePlatform<null, PurrAccountMeta>({
   capabilities: {
-    specialisms: ['sales-non-guaranteed'] as const,
+    specialisms: ['sales-non-guaranteed', 'signed-requests'] as const,
     channels: ['display'] as const,
     pricingModels: ['cpm'] as const,
     config: null,
