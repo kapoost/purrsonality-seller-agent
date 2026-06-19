@@ -29,7 +29,10 @@ export interface ProductAllowedAction {
 // Seller's default billing measurement + makegood terms. Echoed verbatim on
 // get_products under `measurement_terms`. Buyers may override at create_media_buy
 // via package.measurement_terms; seller accepts / rejects via detectAggressiveTerms.
-// AdCP 3.1 MeasurementTerms shape (subset we expose).
+// AdCP 3.0.12+ MeasurementTerms shape (subset we expose). MakegoodRemedy enum
+// values MUST match /schemas/3.0.x/enums/makegood-remedy.json — using anything
+// else breaks JSON-schema validation in the comply runner and cascades into
+// failures on every storyboard that asserts get_products response shape.
 export interface PurrProductMeasurementTerms {
   billing_measurement?: {
     vendor: { domain: string };
@@ -37,7 +40,7 @@ export interface PurrProductMeasurementTerms {
     measurement_window?: string;
   };
   makegood_policy?: {
-    available_remedies: readonly ('makegood_inventory' | 'credit_note' | 'refund' | 'rate_credit')[];
+    available_remedies: readonly ('additional_delivery' | 'credit' | 'invoice_adjustment')[];
   };
 }
 
@@ -87,7 +90,7 @@ export const PRODUCTS: readonly PurrProductConfig[] = [
         measurement_window: 'post_sivt',
       },
       makegood_policy: {
-        available_remedies: ['makegood_inventory', 'credit_note'],
+        available_remedies: ['additional_delivery', 'credit'],
       },
     },
   },
