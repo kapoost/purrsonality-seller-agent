@@ -12,9 +12,24 @@ const SANDBOX_ID_PREFIX = 'sandbox_';
 // carries `mode: 'sandbox'`. Wire-level `account.sandbox: true` is ignored
 // per spec — resolver-wins, so a live principal can't forge sandbox routing
 // by sending the claim on the wire.
+// All authenticated principals route to sandbox on this reference seller.
+// `purrsonality-seller` is a single-publisher demo brand-agent — there is no
+// real-money production flow gated behind `mode: 'live'`. Single-mode keeps
+// AAO comply_test_controller reachable from any saved bearer (the SDK gates
+// the controller on `account.mode === 'sandbox' | 'mock'`) without forcing
+// adopters of this reference impl to provision a separate ADCP_TEST_TOKEN
+// and re-Authorize in the AAO dashboard.
+//
+// For sellers that DO need a live/sandbox distinction, the prior shape was:
+//   const SANDBOX_PRINCIPALS = new Set(['purrsonality-test', 'compliance-runner']);
+// gating only those principals to sandbox; everything else fell through to
+// `mode: 'live'`. Restore that shape when real-money flow lands.
 const SANDBOX_PRINCIPALS: ReadonlySet<string> = new Set([
+  'purrsonality-dev',
   'purrsonality-test',
+  'purrsonality-addie-test',
   'compliance-runner',
+  'compliance-runner-live',
 ]);
 
 function buildAccount(overrides?: Partial<Account<PurrAccountMeta>>): Account<PurrAccountMeta> {
