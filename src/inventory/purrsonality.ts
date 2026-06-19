@@ -463,14 +463,17 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       }
       let product = mockUpstream.getProduct(pkg.product_id);
       if (!product) {
-        // AdCP 3.x deterministic_testing storyboards (`deterministic_media_buy`,
-        // `deterministic_delivery`, `deterministic_budget`) use the magic
-        // `test-product` / `test-pricing` placeholders on create_media_buy WITHOUT
-        // a prior comply seed.product step. Sandbox accounts auto-seed unknown
-        // product_ids so the state-machine probes have something to land on;
-        // live accounts still 404 with PRODUCT_NOT_FOUND.
+        // AdCP 3.x deterministic_testing storyboards (deterministic_media_buy,
+        // deterministic_delivery, deterministic_budget) use the magic
+        // `test-product` placeholder on create_media_buy WITHOUT a prior
+        // comply seed.product step. Auto-seed ONLY for the spec-canonical
+        // test prefix in sandbox — narrower than "any unknown product_id"
+        // so error_compliance/error_responses still correctly returns
+        // PRODUCT_NOT_FOUND when a buyer probes with a random nonexistent
+        // product id.
         const isSandbox = (ctx.account as { mode?: string } | undefined)?.mode === 'sandbox';
-        if (isSandbox) {
+        const isTestProductPattern = /^test-/.test(pkg.product_id);
+        if (isSandbox && isTestProductPattern) {
           product = mockUpstream.seedProduct(pkg.product_id);
         } else {
           throw new AdcpError('PRODUCT_NOT_FOUND', { message: `product not found: ${pkg.product_id}` });

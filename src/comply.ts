@@ -199,6 +199,22 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
           `Creative ${params.creative_id} not found`,
         );
       }
+      // Terminal-state guard. `archived` is a terminal status per the AdCP
+      // creative state machine; deterministic_creative/invalid_creative_transition
+      // probes archived → processing and expects INVALID_TRANSITION.
+      const currentState = mockUpstream.getCreativeStatus(params.creative_id);
+      const terminalStates = new Set(['archived']);
+      if (
+        currentState &&
+        terminalStates.has(currentState.status) &&
+        !terminalStates.has(params.status)
+      ) {
+        return {
+          success: false,
+          error: 'INVALID_TRANSITION',
+          message: `cannot transition creative from terminal state ${currentState.status} to ${params.status}`,
+        } as unknown as Awaited<ReturnType<NonNullable<NonNullable<ComplyControllerConfig['force']>['creative_status']>>>;
+      }
       const previous = mockUpstream.setCreativeStatus(
         params.creative_id,
         params.status,
