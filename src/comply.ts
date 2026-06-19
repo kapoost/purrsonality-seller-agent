@@ -1,4 +1,5 @@
 import type { ComplyControllerConfig } from '@adcp/sdk/testing';
+import { TestControllerError } from '@adcp/sdk/server';
 import { mockUpstream } from './upstream/mock.ts';
 import { PUBLISHER } from './config/purrsonality.ts';
 
@@ -166,6 +167,46 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
       return {
         success: true,
         previous_state: previous === 'completed' ? 'completed' : previous === 'paused' ? 'paused' : 'active',
+        current_state: params.status,
+      };
+    },
+
+    // AdCP 3.1 deterministic_testing — deterministic_account storyboard drives
+    // an account through suspended → active → payment_required → active. The
+    // runner pre-syncs an account via sync_accounts (which seller doesn't expose
+    // — SDK returns ACCOUNT_NOT_FOUND-style skip) but still attempts the force
+    // step with whatever account_id the runner generated, so we accept any id:
+    // first-touch becomes the seed, subsequent calls track previous → current
+    // honestly. SDK already validates the AccountStatus enum at the dispatcher.
+    account_status: async (params) => {
+      const previous = mockUpstream.setAccountStatus(params.account_id, params.status);
+      return {
+        success: true,
+        previous_state: previous,
+        current_state: params.status,
+      };
+    },
+
+    // AdCP 3.1 deterministic_testing — deterministic_creative storyboard drives
+    // a creative through approved → archived (terminal) → rejected (with reason).
+    // The controller_validation/not_found_entity probe deliberately calls this
+    // with a nonexistent creative_id — we surface NOT_FOUND so the SDK wraps
+    // it as the spec-required ControllerError.
+    creative_status: async (params) => {
+      if (!mockUpstream.hasCreative(params.creative_id)) {
+        throw new TestControllerError(
+          'NOT_FOUND',
+          `Creative ${params.creative_id} not found`,
+        );
+      }
+      const previous = mockUpstream.setCreativeStatus(
+        params.creative_id,
+        params.status,
+        params.rejection_reason,
+      );
+      return {
+        success: true,
+        previous_state: (previous?.status as never) ?? ('processing' as never),
         current_state: params.status,
       };
     },

@@ -288,6 +288,69 @@ export const mockUpstream = {
     return previous;
   },
 
+  // Account status override map. Phase 2 deterministic_account storyboards drive
+  // accounts through suspended/payment_required/active without going through
+  // sync_accounts (we don't implement it). The controller pre-seeds the override
+  // for any account_id passed, so the force returns a clean previous→current
+  // transition even on a fresh process.
+  _accountStatusOverrides: new Map<string, 'active' | 'pending_approval' | 'rejected' | 'payment_required' | 'suspended' | 'closed'>(),
+
+  getAccountStatus(accountId: string): 'active' | 'pending_approval' | 'rejected' | 'payment_required' | 'suspended' | 'closed' {
+    return this._accountStatusOverrides.get(accountId) ?? 'active';
+  },
+
+  setAccountStatus(
+    accountId: string,
+    status: 'active' | 'pending_approval' | 'rejected' | 'payment_required' | 'suspended' | 'closed',
+  ): 'active' | 'pending_approval' | 'rejected' | 'payment_required' | 'suspended' | 'closed' {
+    const previous = this._accountStatusOverrides.get(accountId) ?? 'active';
+    this._accountStatusOverrides.set(accountId, status);
+    return previous;
+  },
+
+  // Creative status override map for deterministic_creative storyboards.
+  // Each entry tracks the current status + optional rejection_reason carried
+  // through force_creative_status. NOT_FOUND is signalled by absence of the
+  // creative in BOTH the persistent store and the seededCreatives map AND the
+  // override map — the controller raises TestControllerError('NOT_FOUND').
+  _creativeStatusOverrides: new Map<
+    string,
+    { status: string; rejection_reason?: string }
+  >(),
+
+  getCreativeStatus(creativeId: string): { status: string; rejection_reason?: string } | undefined {
+    const override = this._creativeStatusOverrides.get(creativeId);
+    if (override) return override;
+    // Fallback to seeded creatives so a creative seeded via comply seed.creative
+    // counts as "exists" for the NOT_FOUND probe. Default status is 'processing'
+    // for newly-seeded creatives that haven't been touched by a force yet.
+    const seeded = seededCreatives.get(creativeId);
+    if (seeded) {
+      return { status: (seeded['status'] as string) ?? 'processing' };
+    }
+    return undefined;
+  },
+
+  setCreativeStatus(
+    creativeId: string,
+    status: string,
+    rejectionReason?: string,
+  ): { status: string; rejection_reason?: string } | undefined {
+    const previous = this.getCreativeStatus(creativeId);
+    this._creativeStatusOverrides.set(creativeId, {
+      status,
+      ...(rejectionReason !== undefined && { rejection_reason: rejectionReason }),
+    });
+    return previous;
+  },
+
+  hasCreative(creativeId: string): boolean {
+    return (
+      this._creativeStatusOverrides.has(creativeId) ||
+      seededCreatives.has(creativeId)
+    );
+  },
+
   addDelivery(
     mediaBuyId: string,
     delta: { impressions?: number; clicks?: number; spend?: number; currency?: string },
@@ -320,5 +383,7 @@ export const mockUpstream = {
     seededFormats.clear();
     proposalsMap.clear();
     createMediaBuyDirectives.clear();
+    this._accountStatusOverrides.clear();
+    this._creativeStatusOverrides.clear();
   },
 };
