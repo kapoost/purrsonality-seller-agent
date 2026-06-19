@@ -93,16 +93,25 @@ export const revocationStore = new InMemoryRevocationStore({
 
 // Discovery policy advertised in /.well-known/adcp-capabilities.json
 // under `capabilities.request_signing`. Buyers cache this for 300s and
-// decide whether to sign outbound calls. Keep `required_for` aligned
-// with what the SDK actually enforces (defaults to MUTATING_TASKS — we
-// don't narrow because every mutating tool here is a real state change).
-// `required_for` lists ops that 401 when unsigned. We keep it tight to
-// state-mutating buy lifecycle; `sync_creatives` accepts signatures but
-// also tolerates bearer-only sandbox flows (the storyboard runner and
-// our own e2e specs rely on the unsigned path).
+// decide whether to sign outbound calls.
+//
+// `required_for: []` — bearer auth is the primary control surface on this
+// seller. Signed requests stay fully *supported* (`supported_for` covers
+// the whole mutating buy lifecycle) so buyer agents that prefer RFC 9421
+// continue to authenticate that way, but no operation hard-401's on the
+// absence of a signature. This unblocks the AAO comply storyboard runner
+// (and our own unsigned e2e specs) which exercise create_media_buy and
+// update_media_buy without RFC 9421 — without it, ~12 storyboards in
+// the media_buy_seller track fail at the first mutating step.
+//
+// Trade-off: a buyer-agent compromise that holds the bearer token but not
+// the signing key can mutate. The bearer is encrypted at rest in AAO
+// (and on Fly secrets here), TLS terminates at Fly LetsEncrypt, and the
+// signing key remains useful as a second factor for buyers that opt in.
+// Defense in depth, not defense alone.
 export const requestSigningCapability: VerifierCapability = {
   supported: true,
-  required_for: ['create_media_buy', 'update_media_buy'],
-  supported_for: ['sync_creatives'],
+  required_for: [],
+  supported_for: ['create_media_buy', 'update_media_buy', 'sync_creatives'],
   covers_content_digest: 'either',
 };
