@@ -461,9 +461,20 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       if (!pkg.product_id) {
         throw new AdcpError('INVALID_REQUEST', { message: 'package missing product_id' });
       }
-      const product = mockUpstream.getProduct(pkg.product_id);
+      let product = mockUpstream.getProduct(pkg.product_id);
       if (!product) {
-        throw new AdcpError('PRODUCT_NOT_FOUND', { message: `product not found: ${pkg.product_id}` });
+        // AdCP 3.x deterministic_testing storyboards (`deterministic_media_buy`,
+        // `deterministic_delivery`, `deterministic_budget`) use the magic
+        // `test-product` / `test-pricing` placeholders on create_media_buy WITHOUT
+        // a prior comply seed.product step. Sandbox accounts auto-seed unknown
+        // product_ids so the state-machine probes have something to land on;
+        // live accounts still 404 with PRODUCT_NOT_FOUND.
+        const isSandbox = (ctx.account as { mode?: string } | undefined)?.mode === 'sandbox';
+        if (isSandbox) {
+          product = mockUpstream.seedProduct(pkg.product_id);
+        } else {
+          throw new AdcpError('PRODUCT_NOT_FOUND', { message: `product not found: ${pkg.product_id}` });
+        }
       }
       currency = product.currency;
       if (typeof pkg.budget !== 'number' || pkg.budget < 0) {
