@@ -70,23 +70,16 @@ export const PRODUCTS: readonly PurrProductConfig[] = [
     currency: 'USD',
     min_spend: 100,
     estimated_impressions_per_month: 100_000,
-  },
-  {
-    // Premium variant — declares seller-default `measurement_terms` so
-    // media_buy_seller/measurement_terms_rejected/discover_products can find a
-    // product that supports the negotiation surface, and so buyers can
-    // discover the rate card before submitting their own terms.
-    product_id: 'purr_result_card_measured_v1',
-    name: 'Purrsonality result page slot — measured',
-    description: 'Same post-quiz placement as purr_result_card_v1 with seller-default attention measurement: attentionvendor.example as billing vendor, 10% variance ceiling, c7 reconciliation window. Buyers may propose alternate measurement_terms on create_media_buy; aggressive proposals (required_panels, post_click_days > 30, max_variance < 5%) are rejected with TERMS_REJECTED.',
-    network_code: 'purrsonality',
-    channel: 'display',
-    format_ids: ['display_300x250', 'display_responsive'],
-    ad_unit_ids: ['purrsonality/result_page'],
-    min_cpm: 2.5,
-    currency: 'USD',
-    min_spend: 250,
-    estimated_impressions_per_month: 80_000,
+    // Seller-default billing measurement + makegood terms. Declares
+    // `attentionvendor.example` as the billing vendor (matching the
+    // attention_score entry in reporting_capabilities.vendor_metrics)
+    // with a 10% variance ceiling and post-SIVT reconciliation window.
+    // Buyers may propose alternate measurement_terms on create_media_buy;
+    // aggressive proposals (required_panels, post_click_days > 30,
+    // max_variance < 5%, max_variance_percent < 1%, measurement_window
+    // beyond c7) are rejected with TERMS_REJECTED — see
+    // detectAggressiveTerms in inventory/purrsonality.ts. Required by
+    // media_buy_seller/measurement_terms_rejected/discover_products.
     measurement_terms: {
       billing_measurement: {
         vendor: { domain: 'attentionvendor.example' },
