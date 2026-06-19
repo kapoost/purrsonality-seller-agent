@@ -239,6 +239,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       if (p.allowed_actions && p.allowed_actions.length > 0) {
         (base as unknown as { allowed_actions: readonly unknown[] }).allowed_actions = p.allowed_actions;
       }
+      // Surface seller-default measurement_terms when the product declares
+      // them. Enables media_buy_seller/measurement_terms_rejected/discover_products
+      // to find a candidate before submitting alternate terms.
+      if (p.measurement_terms) {
+        (base as unknown as { measurement_terms: unknown }).measurement_terms = p.measurement_terms;
+      }
       // AdCP 3.1 provenance surface — required by sponsored_intelligence /
       // provenance storyboards (provenance_audit_observation,
       // provenance_enforcement, provenance_truth_of_claim). Single allowlist
@@ -660,7 +666,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     }
 
     if (p.canceled === true) {
-      mockUpstream.updateOrder(buyId, { status: 'canceled' });
+      // Buyer-initiated cancellation via update_media_buy({canceled:true}).
+      // Seller-initiated cancellations would route through a different code
+      // path and stamp `canceled_by: 'seller'`. AdCP 3.x audit requirement.
+      mockUpstream.updateOrder(buyId, {
+        status: 'canceled',
+        canceled_by: 'buyer',
+        canceled_at: new Date().toISOString(),
+      });
     } else if (p.paused === true) {
       mockUpstream.updateOrder(buyId, { status: 'paused' });
     } else if (p.paused === false) {
@@ -702,6 +715,8 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       status: newWireStatus,
       valid_actions: validActionsForStatus(newWireStatus),
       ...(postAvailableActions.length > 0 && { available_actions: postAvailableActions }),
+      ...(updated.canceled_by && { canceled_by: updated.canceled_by }),
+      ...(updated.canceled_at && { canceled_at: updated.canceled_at }),
       revision: 2,
     } as unknown as UpdateMediaBuySuccess;
   },
@@ -890,6 +905,16 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           valid_actions: validActionsForStatus(wireStatus),
           ...(availableActions.length > 0 && { available_actions: availableActions }),
           ...(o.context && Object.keys(o.context).length > 0 && { context: o.context }),
+          // Sandbox-mode observability per AdCP best-practice (eval advisory
+          // `Agent does not confirm sandbox mode in get_media_buys response`).
+          // True iff the resolved account is in sandbox routing — buyers
+          // verify the seller honored the sandbox claim by reading this back.
+          ...((account as { mode?: string }).mode === 'sandbox' && { sandbox: true }),
+          // Cancellation attribution echoed verbatim from the cancel write.
+          // creative_fate_after_cancellation/verify_creative_persists_post_cancel
+          // depends on these being present on canceled buys.
+          ...(o.canceled_by && { canceled_by: o.canceled_by }),
+          ...(o.canceled_at && { canceled_at: o.canceled_at }),
           // AdCP 3.1 dependency_impairment baseline: `health: 'ok'` and an
           // empty impairments[] until creative_status / upstream_unavailable
           // forces an impaired transition. Purrsonality doesn't track
@@ -1241,19 +1266,6 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       limit: 500,
     });
 
-    // Fall back to mockUpstream rows when Postgres returned nothing — keeps
-    // legacy storyboard fixtures (seed via mockUpstream.seedCreative outside
-    // sync_creatives) visible. Persistent rows win when present.
-    const fromPersistent = persistent.map((row) => ({
-      creative_id: row.creative_id,
-      name: row.name ?? row.creative_id,
-      format_id: row.format_id as { agent_url: string; id: string },
-      assets: row.assets ?? {},
-      status: row.status,
-      created_date: row.submitted_at,
-      updated_date: row.reviewed_at ?? row.submitted_at,
-    }));
-
     // Widening: persistent rows carry CreativeStatus enum; the mockUpstream
     // fallback may return non-enum strings (legacy fixtures). Use a generic
     // string status to accept both.
@@ -1266,11 +1278,27 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       created_date: string;
       updated_date: string;
     }
-    let normalized: ListRow[] = fromPersistent as ListRow[];
-    if (normalized.length === 0) {
-      const raw = mockUpstream.listCreatives(ctx.account?.id);
-      const nowIso = new Date().toISOString();
-      normalized = raw.map((c) => {
+
+    const fromPersistent: ListRow[] = persistent.map((row) => ({
+      creative_id: row.creative_id,
+      name: row.name ?? row.creative_id,
+      format_id: row.format_id as { agent_url: string; id: string },
+      assets: row.assets ?? {},
+      status: row.status,
+      created_date: row.submitted_at,
+      updated_date: row.reviewed_at ?? row.submitted_at,
+    }));
+
+    // Merge persistent + mockUpstream creatives (persistent wins on conflict).
+    // Prior impl skipped mockUpstream entirely when persistent had any rows —
+    // that broke creative_lifecycle/list_and_filter and creative_fate_*
+    // storyboards which seed creatives via mockUpstream.seedCreative but also
+    // accumulate persistent rows across test runs.
+    const seenIds = new Set(fromPersistent.map((r) => r.creative_id));
+    const raw = mockUpstream.listCreatives(ctx.account?.id);
+    const nowIso = new Date().toISOString();
+    const fromMock: ListRow[] = raw
+      .map((c) => {
         const cAny = c as Record<string, unknown>;
         const formatRef = cAny['format_id'] as { agent_url?: string; id?: string } | string | undefined;
         const formatId =
@@ -1286,16 +1314,35 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           created_date: (cAny['created_date'] as string) ?? nowIso,
           updated_date: (cAny['updated_date'] as string) ?? nowIso,
         };
-      });
-    }
+      })
+      .filter((row) => !seenIds.has(row.creative_id));
+    let normalized: ListRow[] = [...fromPersistent, ...fromMock];
 
-    // Per AdCP 3.1 filters.creative_ids — when the buyer asks for specific
-    // creatives by ID (e.g. creative_fate_after_cancellation, creative_lifecycle),
-    // narrow the row set before pagination.
-    const filters = (req as { filters?: { creative_ids?: string[] } }).filters;
+    // AdCP 3.1 filters — narrow before pagination.
+    //   - creative_ids: explicit ID lookup (creative_fate_after_cancellation,
+    //     creative_lifecycle).
+    //   - format_id: discovery by format (creative_lifecycle/list_and_filter).
+    //   - statuses: status-scoped views (sandbox approve workflows).
+    const filters = (req as {
+      filters?: {
+        creative_ids?: string[];
+        format_id?: string | { id?: string };
+        statuses?: string[];
+      };
+    }).filters;
     if (filters?.creative_ids && filters.creative_ids.length > 0) {
       const wanted = new Set(filters.creative_ids);
       normalized = normalized.filter((c) => wanted.has(c.creative_id));
+    }
+    if (filters?.format_id) {
+      const wantedFormatId = typeof filters.format_id === 'string' ? filters.format_id : filters.format_id?.id;
+      if (wantedFormatId) {
+        normalized = normalized.filter((c) => c.format_id.id === wantedFormatId);
+      }
+    }
+    if (filters?.statuses && filters.statuses.length > 0) {
+      const wanted = new Set(filters.statuses);
+      normalized = normalized.filter((c) => wanted.has(c.status));
     }
 
     const pageSize = Math.max(1, Math.min(100, r.pagination?.max_results ?? 100));

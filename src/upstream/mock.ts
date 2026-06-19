@@ -24,6 +24,11 @@ export interface MockOrder {
   // populations. When present, getMediaBuys emits these instead of product-id
   // packages so buyers can correlate by package context.buyer_ref alone.
   legacy_packages?: Array<{ package_id: string; context?: { buyer_ref?: string; correlation_id?: string } }>;
+  // Cancellation attribution — stamped when updateOrder({status:'canceled'})
+  // fires. AdCP 3.x media_buy_seller/creative_fate_after_cancellation asserts
+  // both fields are echoed on the update response and on get_media_buys.
+  canceled_by?: 'buyer' | 'seller' | 'system';
+  canceled_at?: string;
 }
 
 export interface PackageOverlay {
@@ -188,7 +193,7 @@ export const mockUpstream = {
 
   updateOrder(
     id: string,
-    patch: Partial<Pick<MockOrder, 'status' | 'budget' | 'pacing' | 'flight_end' | 'flight_start'>> & {
+    patch: Partial<Pick<MockOrder, 'status' | 'budget' | 'pacing' | 'flight_end' | 'flight_start' | 'canceled_by' | 'canceled_at'>> & {
       package_budgets?: Record<string, number>;
     },
   ): MockOrder | undefined {

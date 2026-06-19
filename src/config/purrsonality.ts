@@ -26,6 +26,21 @@ export interface ProductAllowedAction {
   allowed_statuses?: readonly string[];
 }
 
+// Seller's default billing measurement + makegood terms. Echoed verbatim on
+// get_products under `measurement_terms`. Buyers may override at create_media_buy
+// via package.measurement_terms; seller accepts / rejects via detectAggressiveTerms.
+// AdCP 3.1 MeasurementTerms shape (subset we expose).
+export interface PurrProductMeasurementTerms {
+  billing_measurement?: {
+    vendor: { domain: string };
+    max_variance_percent?: number;
+    measurement_window?: string;
+  };
+  makegood_policy?: {
+    available_remedies: readonly ('makegood_inventory' | 'credit_note' | 'refund' | 'rate_credit')[];
+  };
+}
+
 export interface PurrProductConfig {
   product_id: string;
   name: string;
@@ -39,6 +54,7 @@ export interface PurrProductConfig {
   min_spend: number;
   estimated_impressions_per_month: number;
   allowed_actions?: readonly ProductAllowedAction[];
+  measurement_terms?: PurrProductMeasurementTerms;
 }
 
 export const PRODUCTS: readonly PurrProductConfig[] = [
@@ -54,6 +70,33 @@ export const PRODUCTS: readonly PurrProductConfig[] = [
     currency: 'USD',
     min_spend: 100,
     estimated_impressions_per_month: 100_000,
+  },
+  {
+    // Premium variant — declares seller-default `measurement_terms` so
+    // media_buy_seller/measurement_terms_rejected/discover_products can find a
+    // product that supports the negotiation surface, and so buyers can
+    // discover the rate card before submitting their own terms.
+    product_id: 'purr_result_card_measured_v1',
+    name: 'Purrsonality result page slot — measured',
+    description: 'Same post-quiz placement as purr_result_card_v1 with seller-default attention measurement: attentionvendor.example as billing vendor, 10% variance ceiling, c7 reconciliation window. Buyers may propose alternate measurement_terms on create_media_buy; aggressive proposals (required_panels, post_click_days > 30, max_variance < 5%) are rejected with TERMS_REJECTED.',
+    network_code: 'purrsonality',
+    channel: 'display',
+    format_ids: ['display_300x250', 'display_responsive'],
+    ad_unit_ids: ['purrsonality/result_page'],
+    min_cpm: 2.5,
+    currency: 'USD',
+    min_spend: 250,
+    estimated_impressions_per_month: 80_000,
+    measurement_terms: {
+      billing_measurement: {
+        vendor: { domain: 'attentionvendor.example' },
+        max_variance_percent: 10,
+        measurement_window: 'post_sivt',
+      },
+      makegood_policy: {
+        available_remedies: ['makegood_inventory', 'credit_note'],
+      },
+    },
   },
 ] as const;
 
