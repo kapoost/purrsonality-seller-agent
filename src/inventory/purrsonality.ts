@@ -885,6 +885,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     const r = (req ?? {}) as { media_buy_ids?: string[] };
     const wantedIds = r.media_buy_ids && r.media_buy_ids.length > 0 ? new Set(r.media_buy_ids) : null;
     const allOrders = [...mockUpstream.listOrders(account.ctx_metadata.network_code)];
+    const responseIsSandbox = (account as { mode?: string }).mode === 'sandbox';
     // Seeded legacy buys are network-keyed to PUBLISHER too — include any
     // sandbox-seeded order whose id matches the requested list even when the
     // network filter would otherwise skip it (e.g. runner seeded against
@@ -903,6 +904,11 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       .sort((a, b) => (b.created_at > a.created_at ? 1 : b.created_at < a.created_at ? -1 : 0));
     return {
       pagination: { has_more: false, total_count: orders.length },
+      // Top-level sandbox flag — AAO comply best_practice advisory asks for
+      // confirmation that the seller honoured sandbox routing. Per-row sandbox
+      // already lands below; this echo at the response root is what the
+      // advisory checks for.
+      ...(responseIsSandbox && { sandbox: true }),
       media_buys: orders.map((o) => {
         const wireStatus = mockToWireStatus(o.status);
         const productConfigs = o.product_ids
