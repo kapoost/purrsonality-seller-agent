@@ -214,7 +214,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         // present — emitting floor_price marks the option as auction-based and
         // fails those captures. Purrsonality slot is single-publisher, non-
         // guaranteed display sold at a published rate, not auctioned.
-        pricing: { model: 'cpm', fixed: p.min_cpm, currency: p.currency },
+        // Auction-based seeded products (comply seed.pricing_option with
+        // `floor_price` rather than `fixed_price`, e.g. the
+        // sales-non-guaranteed specialism storyboard) take floor_price
+        // semantics so buyers know to bid above the floor. Default to
+        // fixed-rate for the canonical Purrsonality slot.
+        pricing: p.pricing_kind === 'floor'
+          ? { model: 'cpm', floor: p.min_cpm, currency: p.currency, pricing_option_id: p.pricing_option_id }
+          : { model: 'cpm', fixed: p.min_cpm, currency: p.currency, ...(p.pricing_option_id && { pricing_option_id: p.pricing_option_id }) },
         publisher_domain: PUBLISHER.adcp_publisher,
         channels: [p.channel],
         ctx_metadata: { ad_unit_ids: [...p.ad_unit_ids] },

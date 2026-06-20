@@ -58,6 +58,17 @@ export interface PurrProductConfig {
   estimated_impressions_per_month: number;
   allowed_actions?: readonly ProductAllowedAction[];
   measurement_terms?: PurrProductMeasurementTerms;
+  /** Optional pricing_option_id override. When set, getProducts uses this
+   * exact ID instead of the auto-generated cpm_fixed_<price> from
+   * buildProduct. Used by comply seed.pricing_option to inject the
+   * fixture's `pricing_option_id` (e.g. `cpm_auction` for the
+   * sales-non-guaranteed specialism storyboard). */
+  pricing_option_id?: string;
+  /** Optional pricing model override. Auction-based specialisms (e.g.
+   * sales-non-guaranteed) seed `cpm` but expect `floor_price` semantics
+   * instead of `fixed_price`. Tracking the model lets getProducts emit
+   * either shape depending on the comply fixture. */
+  pricing_kind?: 'fixed' | 'floor';
 }
 
 export const PRODUCTS: readonly PurrProductConfig[] = [
