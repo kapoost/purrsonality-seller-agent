@@ -25,37 +25,33 @@ export const platform = definePlatform<null, PurrAccountMeta>({
     channels: ['display'] as const,
     pricingModels: ['cpm'] as const,
     config: null,
-    // Comply test controller advertisement. The SDK's `list_scenarios`
-    // probe returns this list — AAO comply runners read it before each
-    // storyboard and skip any storyboard whose required scenario is
-    // missing (manifests as `fixture_seed_unsupported` cascades on
-    // schema-validation, idempotency, get-media-buys-pagination,
-    // media-buy-seller, sales-non-guaranteed). The prior hand-rolled
-    // 2-entry list omitted every seed scenario even though src/comply.ts
-    // wires them all — runner saw the agent advertise comply_test_controller
-    // but reject every seed call.
+    // Compliance testing advertisement on `get_adcp_capabilities`. Mirrors
+    // what the SDK's live `comply_test_controller.list_scenarios` probe
+    // actually returns at runtime, NOT the full set we wire in src/comply.ts.
     //
-    // Mirror every adapter actually wired in src/comply.ts so the runner's
-    // list_scenarios probe matches the dispatch surface exactly.
+    // **SDK 7.11.x limitation:** the SDK's internal `advertisedScenarios()`
+    // surfaces only force_* and simulate_* adapters via `list_scenarios`,
+    // not the seed_* set, even when the seed adapters are wired in
+    // ComplyControllerConfig.seed. AAO comply runners read list_scenarios
+    // and skip storyboards whose required seed_* scenario is missing —
+    // affects ~9 universal/protocol storyboards (schema-validation,
+    // idempotency, get-media-buys-pagination, pagination-integrity,
+    // pagination-integrity-creative-formats, media-buy-seller seed phases,
+    // sales-non-guaranteed specialism). Verified by direct curl: production
+    // list_scenarios returns 6 entries (4 force + 2 simulate) regardless
+    // of this declared list.
+    //
+    // Resolution path: upgrade to @adcp/sdk 9.0+ where advertisedScenarios
+    // includes seed scenarios. Tracked under Phase 6 follow-ups in memory.
+    // Until then, keep this advertisement honest — match the live probe.
     compliance_testing: {
       scenarios: [
-        // seed.* (src/comply.ts:32-130)
-        'seed_product',
-        'seed_pricing_option',
-        'seed_creative',
-        'seed_creative_format',
-        'seed_media_buy',
-        // force.* (src/comply.ts:146-258)
         'force_create_media_buy_arm',
         'force_media_buy_status',
         'force_account_status',
         'force_creative_status',
-        // simulate.* (src/comply.ts:285-320)
         'simulate_delivery',
         'simulate_budget_spend',
-        // adapter — sandbox-only provenance audit observation
-        // (src/comply.ts:259)
-        'query_provenance_audit_observations',
       ] as const,
     },
   },
