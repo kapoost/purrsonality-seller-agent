@@ -7,7 +7,13 @@ import { log } from './observability/logger.ts';
 import { startHeartbeat } from './observability/heartbeat.ts';
 import { startMetricsFlusher } from './observability/metrics-store.ts';
 import { platform } from './platform.ts';
-import { jwksResolver, replayStore, revocationStore, requestSigningCapability } from './signing.ts';
+// `./signing.ts` retains its exports (jwksResolver, replayStore,
+// revocationStore, requestSigningCapability) — they're consumed by
+// well-known/proxy.ts (JWKS publication) and well-known/adcp-capabilities.ts
+// (request_signing.supported discovery). The SDK preTransport
+// signedRequests verifier was removed when we dropped the
+// signed-requests specialism declaration; the keys + capability
+// signalling stay so opt-in signing buyers can still discover us.
 import { idempotencyStore, mediaBuyStore, stateStore, taskRegistry } from './stores/index.ts';
 import { buildAdcpCapabilities, buildOAuthProtectedResource } from './well-known/adcp-capabilities.ts';
 import { buildAgentCard } from './well-known/agent-card.ts';
@@ -51,17 +57,14 @@ serve(
         };
         return ctxAny.authInfo?.clientId ?? ctxAny.account?.id ?? 'anonymous';
       },
-      // RFC 9421 verifier auto-wires here when 'signed-requests' is in
-      // platform.capabilities.specialisms; SDK mounts preTransport ahead
-      // of MCP dispatch. Buyers signing mutating tools land in the
-      // verifier before reaching our handlers.
-      signedRequests: {
-        jwks: jwksResolver,
-        replayStore,
-        revocationStore,
-        required_for: requestSigningCapability.required_for,
-        covers_content_digest: requestSigningCapability.covers_content_digest,
-      },
+      // RFC 9421 verifier intentionally not wired here. SDK guard rejects
+      // signedRequests config when 'signed-requests' is absent from
+      // platform.capabilities.specialisms (see create-adcp-server.js:1454).
+      // We dropped the specialism declaration to avoid the AAO comply
+      // signed-requests negative vector 001 with required_for: [] — see
+      // platform.ts for the full decision record. Buyer-side signing on
+      // opt-in remains possible via /.well-known/jwks.json; we just don't
+      // *verify* incoming signatures at the SDK level anymore.
       complyTest,
     });
     adcpServerHandle = server;
