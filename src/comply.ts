@@ -43,17 +43,25 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
           allowed_statuses?: readonly string[];
         }>;
       };
-      // Only keep format_ids that this seller actually surfaces in
-      // list_creative_formats; otherwise storyboards that cross-walk
-      // get_products → list_creative_formats trip on phantom IDs. Unknown
-      // fixture format_ids (e.g. "video_30s" from generic test kits) are
-      // dropped so the seeded product falls back to the publisher's default
-      // format set.
-      const knownFormats = new Set(['display_300x250', 'display_responsive']);
+      // Accept comply fixture format_ids verbatim. Prior impl filtered
+      // unknown IDs against our native catalog (display_300x250 /
+      // display_responsive) — that broke schema-validation,
+      // media-buy-seller (sports_preroll_q2), and the sales-non-guaranteed
+      // specialism storyboard (sports_display_auction) because the runner
+      // seeded a product fixture and then asserted the seeded format_id
+      // came back on get_products. The filter dropped the asserted ID,
+      // assertion failed.
+      //
+      // Sandbox seeds are runner-authoritative — if the runner says
+      // "this product has format_id video_30s", we honor it. The
+      // ad-server side does not actually need to render the format;
+      // we just need to echo what we were told to advertise. Real
+      // creative submissions still validate against list_creative_formats
+      // which keeps the native display-only catalog.
       const format_ids = Array.isArray(fixture.format_ids)
         ? fixture.format_ids
             .map((f) => (typeof f === 'string' ? f : f?.id))
-            .filter((s): s is string => typeof s === 'string' && knownFormats.has(s))
+            .filter((s): s is string => typeof s === 'string' && s.length > 0)
         : undefined;
       const SUPPORTED_MODES = new Set(['self_serve', 'conditional_self_serve', 'requires_approval']);
       const allowed_actions = fixture.allowed_actions
