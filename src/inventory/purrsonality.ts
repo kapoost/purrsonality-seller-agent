@@ -179,6 +179,10 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         }>;
         channels?: readonly string[];
         delivery_type?: string;
+        // 3.1 measurement_accountability — capability filter on
+        // reporting_capabilities.available_metrics. Products missing any
+        // requested metric are silently excluded.
+        required_metrics?: readonly string[];
       };
     };
     // 3.1 pricing_currency_filter is the only storyboard that asserts
@@ -234,6 +238,19 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     const wantedDeliveryType = r.filters?.delivery_type;
     if (wantedDeliveryType) {
       raw = raw.filter((p) => (p.delivery_type ?? 'non_guaranteed') === wantedDeliveryType);
+    }
+    // 3.1 measurement_accountability capability filter — hardcoded catalog
+    // exposes only impressions/spend/clicks by default; seeded fixtures
+    // may carry extended available_metrics (completed_views, etc.). Skip
+    // products that don't declare every requested metric.
+    const wantedMetrics = r.filters?.required_metrics;
+    if (wantedMetrics && wantedMetrics.length > 0) {
+      const DEFAULT_METRICS: ReadonlyArray<string> = ['impressions', 'spend', 'clicks'];
+      raw = raw.filter((p) => {
+        const have: ReadonlyArray<string> = (p as { available_metrics?: ReadonlyArray<string> }).available_metrics
+          ?? DEFAULT_METRICS;
+        return wantedMetrics.every((m) => have.includes(m));
+      });
     }
 
     // 3.1 pricing_currency_filter — match against product-level pricing_options
