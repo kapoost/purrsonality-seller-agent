@@ -402,6 +402,26 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
 
     const directive = mockUpstream.consumeCreateMediaBuyDirective(account.id);
 
+    // AAO 3.1 create_media_buy_async/submitted_arm_response: when the
+    // controller registered a `submitted` directive, the seller MUST
+    // return the submitted task envelope (status='submitted', task_id
+    // matching the registered value, no media_buy_id, no packages) and
+    // process the actual order asynchronously. The runner's
+    // sample_request uses a product_id that the seller doesn't carry
+    // (e.g. `async_signed_io_q2`) precisely to verify the seller honours
+    // the directive WITHOUT running product/budget validation up-front.
+    // Short-circuit before any validation throws.
+    if (directive?.arm === 'submitted' && directive.task_id) {
+      const submittedResponse = {
+        status: 'submitted' as const,
+        task_id: directive.task_id,
+        ...(directive.message && { message: directive.message }),
+      };
+      return ctx.handoffToTask(async () => submittedResponse as unknown as CreateMediaBuySuccess, {
+        task_id: directive.task_id,
+      });
+    }
+
     const packages = req.packages ?? [];
     if (packages.length === 0 && !req.proposal_id) {
       throw new AdcpError('INVALID_REQUEST', { message: 'packages[] or proposal_id is required' });
@@ -608,9 +628,8 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       ),
     } as unknown as CreateMediaBuySuccess;
 
-    if (directive?.arm === 'submitted' && directive.task_id) {
-      return ctx.handoffToTask(async () => successResponse, { task_id: directive.task_id });
-    }
+    // submitted-arm directive is handled at the top of the handler; if we
+    // reached here, the directive (if any) was something other than 'submitted'.
 
     return successResponse;
   },
