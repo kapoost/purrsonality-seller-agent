@@ -158,27 +158,9 @@ function validActionsForStatus(status: MediaBuyStatus): MediaBuyStatus extends n
   }
 }
 
-function buildPackageResponse(
-  orderId: string,
-  productId: string,
-  budget: number,
-  pricingOptionId: string,
-  hasCreatives: boolean,
-  context?: { buyer_ref?: string; correlation_id?: string },
-): Package {
-  return {
-    package_id: `${orderId}_${productId}`,
-    product_id: productId,
-    budget,
-    pricing_option_id: pricingOptionId,
-    pacing: 'even',
-    status: hasCreatives ? 'active' : 'pending_creatives',
-    // Per AdCP 3.1 storyboards (pending_creatives_to_start, package_correlation_*),
-    // package context echoes the buyer-supplied correlation/buyer_ref so the
-    // buyer SDK can stitch package-level outcomes back to its line-item ledger.
-    ...(context && Object.keys(context).length > 0 && { context }),
-  } as unknown as Package;
-}
+// buildPackageResponse removed when create_media_buy + get_media_buys
+// converged on synth_packages (canonical per-package allocation table)
+// to support multi-package-same-product cardinality.
 
 const handlers = defineSalesPlatform<PurrAccountMeta>({
   async getProducts(req: GetProductsRequest, ctx) {
@@ -702,6 +684,33 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       ...(Object.keys(packagePricingOptions).length > 0 && { package_pricing_options: packagePricingOptions }),
     });
 
+    // Detect multi-package-same-product (3.1 dependency_impairment_cardinality
+    // creates 2 packages on the same product_id) and allocate unique package_ids.
+    // synth_packages becomes the canonical per-package state — get_media_buys
+    // + update_media_buy read from here, falling back to product_ids[] for
+    // legacy single-package-per-product buys.
+    const productIdCounts = new Map<string, number>();
+    for (const pid of productIds) productIdCounts.set(pid, (productIdCounts.get(pid) ?? 0) + 1);
+    const hasCollision = [...productIdCounts.values()].some((c) => c > 1);
+    const seenCount = new Map<string, number>();
+    const synthPackages = packages.map((pkg) => {
+      const idx = seenCount.get(pkg.product_id) ?? 0;
+      seenCount.set(pkg.product_id, idx + 1);
+      const packageId = hasCollision && (productIdCounts.get(pkg.product_id) ?? 0) > 1
+        ? `${order.order_id}_${pkg.product_id}_${idx}`
+        : `${order.order_id}_${pkg.product_id}`;
+      return {
+        package_id: packageId,
+        product_id: pkg.product_id,
+        budget: pkg.budget,
+        pricing_option_id: pkg.pricing_option_id ?? 'po_cpm_default',
+        ...((pkg as { context?: { buyer_ref?: string; correlation_id?: string } }).context && {
+          context: (pkg as { context: { buyer_ref?: string; correlation_id?: string } }).context,
+        }),
+      };
+    });
+    mockUpstream.setSynthPackages(order.order_id, synthPackages);
+
     for (const [productId, overlay] of overlayMap.entries()) {
       mockUpstream.setPackageOverlay(order.order_id, productId, overlay);
     }
@@ -725,16 +734,15 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       ...(availableActions.length > 0 && { available_actions: availableActions }),
       confirmed_at: order.created_at,
       revision: 1,
-      packages: packages.map((pkg) =>
-        buildPackageResponse(
-          order.order_id,
-          pkg.product_id,
-          pkg.budget,
-          pkg.pricing_option_id ?? 'po_cpm_default',
-          hasAnyCreatives,
-          (pkg as { context?: { buyer_ref?: string; correlation_id?: string } }).context,
-        ),
-      ),
+      packages: synthPackages.map((sp) => ({
+        package_id: sp.package_id,
+        product_id: sp.product_id,
+        budget: sp.budget,
+        pricing_option_id: sp.pricing_option_id,
+        pacing: 'even' as const,
+        status: hasAnyCreatives ? 'active' : 'pending_creatives',
+        ...(sp.context && Object.keys(sp.context).length > 0 && { context: sp.context }),
+      })) as unknown as Package[],
     } as unknown as CreateMediaBuySuccess;
 
     // submitted-arm directive is handled at the top of the handler; if we
@@ -901,10 +909,17 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           pkgPatch.package_id,
           pkgPatch.creative_assignments,
         );
-        const productId = pkgPatch.package_id.startsWith(`${buyId}_`)
-          ? pkgPatch.package_id.slice(`${buyId}_`.length)
-          : pkgPatch.package_id;
-        const pricingOptionId = existing.package_pricing_options?.[productId] ?? 'po_cpm_default';
+        // Prefer synth_packages (canonical multi-package allocation table)
+        // for product_id + pricing_option_id lookup; fall back to legacy
+        // prefix-strip + package_pricing_options for single-package buys.
+        const synthHit = existing.synth_packages?.find((sp) => sp.package_id === pkgPatch.package_id);
+        const productId = synthHit?.product_id
+          ?? (pkgPatch.package_id.startsWith(`${buyId}_`)
+            ? pkgPatch.package_id.slice(`${buyId}_`.length)
+            : pkgPatch.package_id);
+        const pricingOptionId = synthHit?.pricing_option_id
+          ?? existing.package_pricing_options?.[productId]
+          ?? 'po_cpm_default';
         affectedPackagesAcc.push({
           package_id: pkgPatch.package_id,
           product_id: productId,
@@ -1162,6 +1177,27 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
                 status: o.status === 'completed' || o.status === 'canceled' ? 'completed' : 'active',
                 ...(lp.context && Object.keys(lp.context).length > 0 && { context: lp.context }),
               }))
+            : o.synth_packages && o.synth_packages.length > 0
+            ? o.synth_packages.map((sp) => {
+                const overlay = o.package_overlays?.[sp.product_id];
+                const creativeAssignments = o.package_creative_assignments?.[sp.package_id];
+                return {
+                  package_id: sp.package_id,
+                  product_id: sp.product_id,
+                  budget: sp.budget,
+                  pricing_option_id: sp.pricing_option_id,
+                  pacing: 'even' as const,
+                  ...(sp.context && Object.keys(sp.context).length > 0 && { context: sp.context }),
+                  status: o.status === 'completed' || o.status === 'canceled' ? 'completed' : 'active',
+                  ...(overlay && {
+                    targeting_overlay: {
+                      ...(overlay.property_list && { property_list: overlay.property_list }),
+                      ...(overlay.collection_list && { collection_list: overlay.collection_list }),
+                    },
+                  }),
+                  ...(creativeAssignments && creativeAssignments.length > 0 && { creative_assignments: creativeAssignments }),
+                };
+              })
             : o.product_ids.map((pid) => {
             const overlay = o.package_overlays?.[pid];
             const pkgContext = o.package_contexts?.[pid];

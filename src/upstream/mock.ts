@@ -52,6 +52,19 @@ export interface MockOrder {
   // responses must echo the original buyer-supplied option, not a
   // hardcoded default.
   package_pricing_options?: Record<string, string>;
+  // Per-package allocation table — written at create_media_buy time so
+  // multi-package buys with the same product_id (3.1
+  // dependency_impairment_cardinality creates 2 packages on
+  // purr_result_card_v1) get unique package_ids and per-package metadata
+  // preserved. When present, get_media_buys + update_media_buy read from
+  // here instead of synthesising from product_ids[].
+  synth_packages?: Array<{
+    package_id: string;
+    product_id: string;
+    budget: number;
+    pricing_option_id: string;
+    context?: { buyer_ref?: string; correlation_id?: string };
+  }>;
 }
 
 export interface PackageOverlay {
@@ -306,6 +319,13 @@ export const mockUpstream = {
     context?: { correlation_id?: string; buyer_ref?: string };
     package_contexts?: Record<string, { correlation_id?: string; buyer_ref?: string }>;
     package_pricing_options?: Record<string, string>;
+    synth_packages?: Array<{
+      package_id: string;
+      product_id: string;
+      budget: number;
+      pricing_option_id: string;
+      context?: { buyer_ref?: string; correlation_id?: string };
+    }>;
   }): MockOrder {
     if (args.client_request_id) {
       const existing = requestKey.get(args.client_request_id);
@@ -335,6 +355,9 @@ export const mockUpstream = {
       }),
       ...(args.package_pricing_options && Object.keys(args.package_pricing_options).length > 0 && {
         package_pricing_options: { ...args.package_pricing_options },
+      }),
+      ...(args.synth_packages && args.synth_packages.length > 0 && {
+        synth_packages: args.synth_packages.map((p) => ({ ...p })),
       }),
     };
 
@@ -394,6 +417,24 @@ export const mockUpstream = {
     if (!o) return;
     o.package_overlays = o.package_overlays ?? {};
     o.package_overlays[productId] = { ...(o.package_overlays[productId] ?? {}), ...overlay };
+  },
+
+  /** Canonical per-package allocation table. Written by createMediaBuy
+   * after the order_id is minted; read by get_media_buys + update_media_buy
+   * to support multi-package-same-product cardinality. */
+  setSynthPackages(
+    orderId: string,
+    synth: ReadonlyArray<{
+      package_id: string;
+      product_id: string;
+      budget: number;
+      pricing_option_id: string;
+      context?: { buyer_ref?: string; correlation_id?: string };
+    }>,
+  ): void {
+    const o = orders.get(orderId);
+    if (!o) return;
+    o.synth_packages = synth.map((p) => ({ ...p }));
   },
 
   /** 3.1 dependency_impairment — replacement semantics on package
