@@ -412,18 +412,20 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     // the directive WITHOUT running product/budget validation up-front.
     // Short-circuit before any validation throws.
     if (directive?.arm === 'submitted') {
-      // Let SDK auto-allocate task_id rather than passing
-      // `directive.task_id` as overrideTaskId — the storyboard's
-      // hardcoded task_id (e.g. task_async_signed_io_q2) collides with
-      // a persistent Postgres taskRegistry on the second eval run with
-      // "task_id already registered". The storyboard validation on
-      // task_id is `field_present`, not `field_value`, so any
-      // framework-allocated id satisfies the contract.
+      // The storyboard's `field_value` assertion on `task_id` pins the
+      // value to `$context.forced_task_id` (the deterministic id the
+      // controller registered — e.g. `task_async_signed_io_q2`). Pass it
+      // as overrideTaskId so the SDK reuses it instead of minting a fresh
+      // UUID. Cross-run collisions in the persistent Postgres registry
+      // are handled by `dropTaskRecord` in comply.ts's
+      // `force.create_media_buy_arm` (called before the directive is
+      // staged), so the INSERT here finds the row vacated.
       return ctx.handoffToTask(
         async () => ({
           status: 'submitted' as const,
           ...(directive.message && { message: directive.message }),
         }) as unknown as CreateMediaBuySuccess,
+        directive.task_id ? { task_id: directive.task_id } : undefined,
       );
     }
 

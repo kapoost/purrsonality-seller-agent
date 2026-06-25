@@ -2,6 +2,7 @@ import type { ComplyControllerConfig } from '@adcp/sdk/testing';
 import { TestControllerError } from '@adcp/sdk/server';
 import { mockUpstream } from './upstream/mock.ts';
 import { PUBLISHER } from './config/purrsonality.ts';
+import { dropTaskRecord } from './stores/index.ts';
 
 // `queryProvenanceAuditObservations` is an extension scenario landing in SDK
 // 9.x (adcp#2186); the 7.11.1 typed config doesn't expose it yet. We attach
@@ -157,6 +158,13 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
   force: {
     create_media_buy_arm: async (params) => {
       const accountId = `sandbox_${PUBLISHER.network_code}`;
+      // The storyboard's `field_value` assertion on `task_id` demands the
+      // exact directive value (e.g. `task_async_signed_io_q2`) be echoed
+      // back. Drop any prior record so the SDK's overrideTaskId re-register
+      // succeeds across repeat eval runs.
+      if (params.task_id !== undefined) {
+        await dropTaskRecord(params.task_id);
+      }
       mockUpstream.setCreateMediaBuyDirective(accountId, {
         arm: params.arm,
         ...(params.task_id !== undefined && { task_id: params.task_id }),
