@@ -709,6 +709,28 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       if (typeof pkg.budget !== 'number' || pkg.budget < 0) {
         throw new AdcpError('INVALID_REQUEST', { message: 'package.budget must be a non-negative number' });
       }
+      // 3.1 canonical_formats reject_bare_image_selector_for_fixed_mrec:
+      // when the product's canonical declaration has fixed width+height on
+      // params, a buyer that supplies only `format_kind: "image"` (bare
+      // selector) without enriching with the matching dimensions cannot
+      // satisfy the product's fixed declaration → UNSUPPORTED_FEATURE.
+      const pkgFormatKind = (pkg as { format_kind?: string }).format_kind;
+      if (pkgFormatKind) {
+        const opt0 = product.format_options?.[0] as
+          | { params?: { width?: number; height?: number } }
+          | undefined;
+        const productHasFixedDims = typeof opt0?.params?.width === 'number'
+          && typeof opt0?.params?.height === 'number';
+        const pkgFormatRef = (pkg as { format_ref?: unknown; format_id?: unknown; width?: number; height?: number }).width !== undefined
+          || (pkg as { width?: number }).width !== undefined;
+        if (productHasFixedDims && !pkgFormatRef) {
+          throw new AdcpError('UNSUPPORTED_FEATURE', {
+            message: `bare canonical selector format_kind=${pkgFormatKind} does not satisfy fixed-size product ${pkg.product_id} (${opt0!.params!.width}x${opt0!.params!.height})`,
+            field: `packages[0].format_kind`,
+            recovery: 'correctable',
+          });
+        }
+      }
       totalBudget += pkg.budget;
       productIds.push(pkg.product_id);
       packageBudgets[pkg.product_id] = pkg.budget;
