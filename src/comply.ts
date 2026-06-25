@@ -110,11 +110,21 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
           ),
         }))
         .filter((a) => a.modes.length > 0);
+      // 3.1 canonical_formats v2-only: fixture supplies format_options[]
+      // but no format_ids. Storyboard's `field_absent: products[0].format_ids`
+      // assertion fails if we default-back to the hardcoded catalog's
+      // format_ids. Explicitly clear when format_options is the only
+      // declaration path.
+      const isV2Only = fixture.format_options !== undefined
+        && fixture.format_options.length > 0
+        && (!format_ids || format_ids.length === 0)
+        && (!format_id_refs || format_id_refs.length === 0);
       mockUpstream.seedProduct(params.product_id, {
         ...(fixture.name !== undefined && { name: fixture.name }),
         ...(fixture.description !== undefined && { description: fixture.description }),
         ...(format_ids && format_ids.length > 0 && { format_ids }),
         ...(format_id_refs && format_id_refs.length > 0 && { format_id_refs }),
+        ...(isV2Only && { format_ids: [] as readonly string[] }),
         ...(allowed_actions && allowed_actions.length > 0 && { allowed_actions }),
         ...(fixture.creative_policy !== undefined && { creative_policy: fixture.creative_policy }),
         ...(fixture.signal_targeting_allowed !== undefined && {

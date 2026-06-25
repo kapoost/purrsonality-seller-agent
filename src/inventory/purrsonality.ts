@@ -288,15 +288,21 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // an external agent_url (e.g. https://creative.adcontextprotocol.org/),
       // pass the structured shape WITHOUT the agentUrl shortcut so each
       // format keeps its own agent_url. Otherwise emit through the
-      // single-agent shortcut for our own format catalog.
+      // single-agent shortcut for our own format catalog. For v2-only
+      // products (format_options only, no format_ids), pass a placeholder
+      // so buildProduct accepts the call; the format_ids field is deleted
+      // from the response shape below.
       const useFormatRefs = p.format_id_refs && p.format_id_refs.length > 0;
+      const isV2Only = !!(p.format_options && p.format_options.length > 0
+        && p.format_ids.length === 0
+        && !useFormatRefs);
       const base = buildProduct({
         id: p.product_id,
         name: p.name,
         description: p.description,
         formats: useFormatRefs
           ? p.format_id_refs!.map((f) => ({ id: f.id, agent_url: f.agent_url }))
-          : [...p.format_ids],
+          : (isV2Only ? ['display_300x250'] : [...p.format_ids]),
         ...(useFormatRefs ? {} : { agentUrl: FORMAT_AGENT_URL }),
         delivery_type: 'non_guaranteed',
         pricing,
@@ -379,6 +385,13 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // products via filters.required_vendor_metrics matching these.
       if (p.format_options) {
         (base as unknown as { format_options: unknown }).format_options = p.format_options;
+      }
+      // v2-only path: fixture seeded format_options[] and explicitly
+      // empty format_ids[]. Storyboard asserts `field_absent: format_ids`
+      // — delete the property so the response shape advertises the
+      // canonical-only declaration.
+      if (isV2Only) {
+        delete (base as unknown as { format_ids?: unknown }).format_ids;
       }
       if (p.publisher_properties) {
         (base as unknown as { publisher_properties: unknown }).publisher_properties = p.publisher_properties;
