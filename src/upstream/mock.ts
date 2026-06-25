@@ -200,6 +200,9 @@ export const mockUpstream = {
       ...((overrides?.vendor_metrics ?? prior?.vendor_metrics) && {
         vendor_metrics: overrides?.vendor_metrics ?? prior?.vendor_metrics,
       }),
+      ...((overrides?.format_id_refs ?? prior?.format_id_refs) && {
+        format_id_refs: overrides?.format_id_refs ?? prior?.format_id_refs,
+      }),
     };
     seededProducts.set(id, product);
     return product;

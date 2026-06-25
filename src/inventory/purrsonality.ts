@@ -284,12 +284,20 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         : (p.pricing_kind === 'floor'
           ? { model: 'cpm' as const, floor: p.min_cpm, currency: p.currency, pricing_option_id: p.pricing_option_id }
           : { model: 'cpm' as const, fixed: p.min_cpm, currency: p.currency, ...(p.pricing_option_id && { pricing_option_id: p.pricing_option_id }) });
+      // 3.1 canonical_formats — when the fixture seeded format_id_refs with
+      // an external agent_url (e.g. https://creative.adcontextprotocol.org/),
+      // pass the structured shape WITHOUT the agentUrl shortcut so each
+      // format keeps its own agent_url. Otherwise emit through the
+      // single-agent shortcut for our own format catalog.
+      const useFormatRefs = p.format_id_refs && p.format_id_refs.length > 0;
       const base = buildProduct({
         id: p.product_id,
         name: p.name,
         description: p.description,
-        formats: [...p.format_ids],
-        agentUrl: FORMAT_AGENT_URL,
+        formats: useFormatRefs
+          ? p.format_id_refs!.map((f) => ({ id: f.id, agent_url: f.agent_url }))
+          : [...p.format_ids],
+        ...(useFormatRefs ? {} : { agentUrl: FORMAT_AGENT_URL }),
         delivery_type: 'non_guaranteed',
         pricing,
         publisher_domain: PUBLISHER.adcp_publisher,

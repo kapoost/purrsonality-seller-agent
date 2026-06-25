@@ -91,6 +91,16 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
             .map((f) => (typeof f === 'string' ? f : f?.id))
             .filter((s): s is string => typeof s === 'string' && s.length > 0)
         : undefined;
+      // Preserve full {agent_url, id} shape when the fixture targets a
+      // specific external format-agent (3.1 canonical_formats fixtures
+      // point at https://creative.adcontextprotocol.org/ — must round-trip).
+      const format_id_refs = Array.isArray(fixture.format_ids)
+        ? fixture.format_ids
+            .filter((f): f is { agent_url?: string; id?: string } =>
+              typeof f === 'object' && f !== null && typeof (f as { agent_url?: string }).agent_url === 'string')
+            .filter((f): f is { agent_url: string; id: string } => typeof f.id === 'string')
+            .map((f) => ({ agent_url: f.agent_url, id: f.id }))
+        : undefined;
       const SUPPORTED_MODES = new Set(['self_serve', 'conditional_self_serve', 'requires_approval']);
       const allowed_actions = fixture.allowed_actions
         ?.map((a) => ({
@@ -104,6 +114,7 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         ...(fixture.name !== undefined && { name: fixture.name }),
         ...(fixture.description !== undefined && { description: fixture.description }),
         ...(format_ids && format_ids.length > 0 && { format_ids }),
+        ...(format_id_refs && format_id_refs.length > 0 && { format_id_refs }),
         ...(allowed_actions && allowed_actions.length > 0 && { allowed_actions }),
         ...(fixture.creative_policy !== undefined && { creative_policy: fixture.creative_policy }),
         ...(fixture.signal_targeting_allowed !== undefined && {

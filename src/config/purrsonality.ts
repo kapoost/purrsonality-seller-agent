@@ -51,6 +51,13 @@ export interface PurrProductConfig {
   network_code: string;
   channel: 'display';
   format_ids: readonly string[];
+  /** 3.1 canonical_formats — fixture seeds format_ids as {agent_url, id}
+   * objects pointing at https://creative.adcontextprotocol.org/. The
+   * storyboard asserts the exact agent_url round-trips, so we must NOT
+   * overwrite with our own FORMAT_AGENT_URL. Stored as the raw object
+   * shape when seeded; getProducts threads it into buildProduct without
+   * the agentUrl shortcut. */
+  format_id_refs?: ReadonlyArray<{ agent_url: string; id: string }>;
   ad_unit_ids: readonly string[];
   min_cpm: number;
   currency: string;
