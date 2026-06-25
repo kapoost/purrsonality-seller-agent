@@ -87,6 +87,14 @@ export const mockUpstream = {
     return [...PRODUCTS, ...seededProducts.values()];
   },
 
+  listSeededProducts(): readonly PurrProductConfig[] {
+    return [...seededProducts.values()];
+  },
+
+  hasSeededProducts(): boolean {
+    return seededProducts.size > 0;
+  },
+
   getProduct(id: string): PurrProductConfig | undefined {
     return PRODUCTS.find((p) => p.product_id === id) ?? seededProducts.get(id);
   },
@@ -112,9 +120,50 @@ export const mockUpstream = {
       ...((overrides?.creative_policy ?? prior?.creative_policy) && {
         creative_policy: overrides?.creative_policy ?? prior?.creative_policy,
       }),
+      ...((overrides?.pricing_options ?? prior?.pricing_options) && {
+        pricing_options: overrides?.pricing_options ?? prior?.pricing_options,
+      }),
+      ...((overrides?.signal_targeting_allowed ?? prior?.signal_targeting_allowed) !== undefined && {
+        signal_targeting_allowed: overrides?.signal_targeting_allowed ?? prior?.signal_targeting_allowed,
+      }),
+      ...((overrides?.signal_targeting_rules ?? prior?.signal_targeting_rules) && {
+        signal_targeting_rules: overrides?.signal_targeting_rules ?? prior?.signal_targeting_rules,
+      }),
+      ...((overrides?.signal_targeting_options ?? prior?.signal_targeting_options) && {
+        signal_targeting_options: overrides?.signal_targeting_options ?? prior?.signal_targeting_options,
+      }),
     };
     seededProducts.set(id, product);
     return product;
+  },
+
+  /** Append a pricing_option to a seeded product's pricing_options[]. Used
+   * by comply seed.pricing_option (pricing_currency_filter seeds two
+   * pricing rows per product — USD + EUR — and the second call must NOT
+   * overwrite the first). */
+  appendPricingOption(
+    productId: string,
+    option: {
+      pricing_option_id: string;
+      pricing_model: string;
+      currency: string;
+      fixed_price?: number;
+      floor_price?: number;
+    },
+  ): void {
+    const prior = seededProducts.get(productId);
+    const base = prior ?? mockUpstream.seedProduct(productId);
+    const existing = [...(base.pricing_options ?? [])];
+    const dedupIdx = existing.findIndex((p) => p.pricing_option_id === option.pricing_option_id);
+    if (dedupIdx >= 0) {
+      existing[dedupIdx] = option;
+    } else {
+      existing.push(option);
+    }
+    seededProducts.set(productId, {
+      ...base,
+      pricing_options: existing,
+    });
   },
 
   /**

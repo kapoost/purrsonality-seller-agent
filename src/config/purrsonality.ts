@@ -75,6 +75,44 @@ export interface PurrProductConfig {
    * surfaces it verbatim so the storyboard's policy-discovery phase
    * passes. When unset, getProducts emits the default hardcoded policy. */
   creative_policy?: Record<string, unknown>;
+  /** Optional multi-currency pricing_options. Storyboards (3.1
+   * pricing_currency_filter) seed two pricing_option rows per product —
+   * one USD, one EUR — and assert get_products with
+   * filters.pricing_currencies prunes to the requested set. When present,
+   * getProducts emits this array verbatim via buildPricingOption and the
+   * filter logic operates on it. When absent, the legacy
+   * single-pricing-option shape (min_cpm + currency + pricing_option_id)
+   * stays canonical. */
+  pricing_options?: ReadonlyArray<{
+    pricing_option_id: string;
+    pricing_model: string;
+    currency: string;
+    fixed_price?: number;
+    floor_price?: number;
+  }>;
+  /** Optional signal targeting. pricing_currency_filter seeds two
+   * variants — `selection_mode: optional` (skippable) and
+   * `selection_mode: fixed` (mandatory). When fixed and the signal's
+   * pricing_options have NO entry in a requested currency, the product
+   * is excluded from filter results. Stored verbatim from the comply
+   * fixture for round-trip echoing on get_products. */
+  signal_targeting_allowed?: boolean;
+  signal_targeting_rules?: {
+    resolution_model?: string;
+    selection_mode?: 'optional' | 'fixed';
+  };
+  signal_targeting_options?: ReadonlyArray<{
+    signal_ref?: { scope?: string; signal_id?: string };
+    name?: string;
+    value_type?: string;
+    default_selected?: boolean;
+    pricing_options?: ReadonlyArray<{
+      pricing_option_id: string;
+      model: string;
+      currency: string;
+      cpm?: number;
+    }>;
+  }>;
 }
 
 export const PRODUCTS: readonly PurrProductConfig[] = [

@@ -15,6 +15,7 @@
 
 import {
   AdcpError,
+  buildPricingOption,
   buildProduct,
   defineSalesPlatform,
   type GetProductsPayload,
@@ -180,12 +181,23 @@ function buildPackageResponse(
 }
 
 const handlers = defineSalesPlatform<PurrAccountMeta>({
-  async getProducts(req: GetProductsRequest, _ctx) {
+  async getProducts(req: GetProductsRequest, ctx) {
     const r = req as {
       buying_mode?: string;
       brief?: string;
       refine?: Array<{ scope?: string; proposal_id?: string; product_id?: string; action?: string }>;
+      filters?: {
+        pricing_currencies?: readonly string[];
+      };
     };
+    // In sandbox mode with seeded products, hide the default live catalog
+    // (purr_result_card_v1) so storyboard runners see exactly what they
+    // seeded — required by 3.1 storyboards that assert
+    // `products[0].product_id` / `field_absent: products[1]` against a
+    // fixture (pricing_currency_filter, canonical_formats). Live mode or
+    // sandbox without seeds keeps the default catalog visible.
+    const isSandbox = (ctx.account as { mode?: string } | undefined)?.mode === 'sandbox';
+    const seededOnly = isSandbox && mockUpstream.hasSeededProducts();
     // Seeded products are hoisted to `products[0]` ONLY when the brief
     // names them — `product_id` with underscores rewritten as spaces is
     // matched (case-insensitive) as a substring of the brief. This lets the
@@ -194,13 +206,63 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     // scenarios that share a process and would otherwise inherit the
     // `allowed_actions[]` surface through $context.product_id.
     const briefLc = (r.brief ?? '').toLowerCase();
-    const raw = [...mockUpstream.listProducts()].sort((a, b) => {
+    let raw = (seededOnly
+      ? [...mockUpstream.listSeededProducts()]
+      : [...mockUpstream.listProducts()]
+    ).sort((a, b) => {
       const aHit = briefLc && briefLc.includes(a.product_id.replace(/_/g, ' ').toLowerCase());
       const bHit = briefLc && briefLc.includes(b.product_id.replace(/_/g, ' ').toLowerCase());
       if (aHit === bHit) return 0;
       return aHit ? -1 : 1;
     });
+    // 3.1 pricing_currency_filter — match against product-level pricing_options
+    // AND mandatory product-scoped signal pricing. Optional signal pricing is
+    // explicitly out of scope (spec: "Buyers remain responsible for avoiding
+    // optional add-on prices they cannot transact in").
+    const wantedCurrencies = r.filters?.pricing_currencies;
+    if (wantedCurrencies && wantedCurrencies.length > 0) {
+      const wanted = new Set(wantedCurrencies);
+      raw = raw.filter((p) => {
+        // Product-level currency match.
+        const productCurrencies = p.pricing_options && p.pricing_options.length > 0
+          ? p.pricing_options.map((po) => po.currency)
+          : [p.currency];
+        if (!productCurrencies.some((c) => wanted.has(c))) return false;
+        // Mandatory signal-currency match: any fixed/required signal
+        // whose pricing_options are exclusively in non-requested currencies
+        // disqualifies the product.
+        const mandatoryMode = p.signal_targeting_rules?.selection_mode === 'fixed';
+        if (mandatoryMode && p.signal_targeting_options && p.signal_targeting_options.length > 0) {
+          for (const sig of p.signal_targeting_options) {
+            const sigCurrencies = (sig.pricing_options ?? []).map((po) => po.currency);
+            if (sigCurrencies.length > 0 && !sigCurrencies.some((c) => wanted.has(c))) {
+              return false;
+            }
+          }
+        }
+        return true;
+      });
+    }
     const products = raw.map((p) => {
+      // Multi-pricing-option products (3.1 pricing_currency_filter seeds
+      // USD + EUR rows): emit ALL pricing_options[] via buildPricingOption,
+      // pruned to filters.pricing_currencies when provided. Legacy
+      // single-pricing-option products (purr_result_card_v1, sales-non-
+      // guaranteed `cpm_auction` seeded fixture) keep the prior shorthand.
+      const multiPricing = p.pricing_options && p.pricing_options.length > 0
+        ? p.pricing_options.filter((po) => !wantedCurrencies || wantedCurrencies.length === 0 || wantedCurrencies.includes(po.currency))
+        : null;
+      const pricing = multiPricing
+        ? multiPricing.map((po) => buildPricingOption({
+            id: po.pricing_option_id,
+            model: po.pricing_model as 'cpm',
+            ...(po.fixed_price !== undefined && { fixed: po.fixed_price }),
+            ...(po.floor_price !== undefined && { floor: po.floor_price }),
+            currency: po.currency,
+          }))
+        : (p.pricing_kind === 'floor'
+          ? { model: 'cpm' as const, floor: p.min_cpm, currency: p.currency, pricing_option_id: p.pricing_option_id }
+          : { model: 'cpm' as const, fixed: p.min_cpm, currency: p.currency, ...(p.pricing_option_id && { pricing_option_id: p.pricing_option_id }) });
       const base = buildProduct({
         id: p.product_id,
         name: p.name,
@@ -208,20 +270,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         formats: [...p.format_ids],
         agentUrl: FORMAT_AGENT_URL,
         delivery_type: 'non_guaranteed',
-        // Fixed CPM rate card (no auction). 3.1 storyboards (canonical_formats,
-        // measurement_*, inventory_list_*, refine_products, dependency_*,
-        // pending_creatives_to_start, …) assert /pricing_options/0/fixed_price
-        // present — emitting floor_price marks the option as auction-based and
-        // fails those captures. Purrsonality slot is single-publisher, non-
-        // guaranteed display sold at a published rate, not auctioned.
-        // Auction-based seeded products (comply seed.pricing_option with
-        // `floor_price` rather than `fixed_price`, e.g. the
-        // sales-non-guaranteed specialism storyboard) take floor_price
-        // semantics so buyers know to bid above the floor. Default to
-        // fixed-rate for the canonical Purrsonality slot.
-        pricing: p.pricing_kind === 'floor'
-          ? { model: 'cpm', floor: p.min_cpm, currency: p.currency, pricing_option_id: p.pricing_option_id }
-          : { model: 'cpm', fixed: p.min_cpm, currency: p.currency, ...(p.pricing_option_id && { pricing_option_id: p.pricing_option_id }) },
+        pricing,
         publisher_domain: PUBLISHER.adcp_publisher,
         channels: [p.channel],
         ctx_metadata: { ad_unit_ids: [...p.ad_unit_ids] },
@@ -282,6 +331,19 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           },
         ],
       };
+      // 3.1 pricing_currency_filter signal_targeting surface — echoed
+      // verbatim from the seeded fixture so the storyboard's
+      // signal_targeting_allowed / signal_targeting_options /
+      // signal_targeting_rules round-trip on the response.
+      if (p.signal_targeting_allowed !== undefined) {
+        (base as unknown as { signal_targeting_allowed: boolean }).signal_targeting_allowed = p.signal_targeting_allowed;
+      }
+      if (p.signal_targeting_rules) {
+        (base as unknown as { signal_targeting_rules: unknown }).signal_targeting_rules = p.signal_targeting_rules;
+      }
+      if (p.signal_targeting_options) {
+        (base as unknown as { signal_targeting_options: unknown }).signal_targeting_options = p.signal_targeting_options;
+      }
       return base;
     });
 
