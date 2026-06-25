@@ -1313,6 +1313,65 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         (cAny['creative_id'] as string) ??
         `creative_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
+      // 3.1 native_in_feed validation — fires when the creative declares
+      // format_id.id === 'native_in_feed'. The format publishes closed-set
+      // constraints (title_max_chars, main_image_sizes, cta_values closed
+      // enum); creatives that violate them MUST be rejected before any
+      // other validation. Storyboard's validation_failures track exercises
+      // 4 specific cases: title too long, image wrong size, cta not in
+      // enum, pixel_tracker custom event missing name.
+      const formatRefSync = cAny['format_id'] as { id?: string } | string | undefined;
+      const formatIdSync = typeof formatRefSync === 'object' && formatRefSync !== null
+        ? formatRefSync.id
+        : (typeof formatRefSync === 'string' ? formatRefSync : undefined);
+      if (formatIdSync === 'native_in_feed') {
+        const a = (cAny['assets'] as Record<string, unknown> | undefined) ?? {};
+        const title = (a['title'] as { content?: string } | undefined)?.content ?? '';
+        const mainImage = a['main_image'] as { width?: number; height?: number } | undefined;
+        const cta = (a['cta'] as { content?: string } | undefined)?.content;
+        const pixelTracker = a['pixel_tracker'] as { event?: string; custom_event_name?: string } | undefined;
+        // Constraint map per storyboard narrative
+        const TITLE_MAX_CHARS = 80;
+        const ALLOWED_IMAGE_SIZES: ReadonlyArray<[number, number]> = [[1200, 627], [1080, 1080]];
+        const ALLOWED_CTAS = new Set(['Learn More', 'Shop Now', 'Sign Up', 'Get Started']);
+        let nativeError: { code: string; message: string; field?: string; details?: unknown } | null = null;
+        if (title.length > TITLE_MAX_CHARS) {
+          nativeError = {
+            code: 'VALIDATION_ERROR',
+            message: `title exceeds title_max_chars (${TITLE_MAX_CHARS})`,
+            field: '/assets/title/content',
+          };
+        } else if (mainImage && mainImage.width !== undefined && mainImage.height !== undefined
+          && !ALLOWED_IMAGE_SIZES.some(([w, h]) => w === mainImage.width && h === mainImage.height)) {
+          nativeError = {
+            code: 'VALIDATION_ERROR',
+            message: `main_image ${mainImage.width}x${mainImage.height} not in declared main_image_sizes`,
+            field: '/assets/main_image',
+          };
+        } else if (cta !== undefined && !ALLOWED_CTAS.has(cta)) {
+          nativeError = {
+            code: 'CREATIVE_VALUE_NOT_ALLOWED',
+            message: `cta value "${cta}" not in declared cta_values closed enum`,
+            field: '/assets/cta/content',
+            details: { allowed_values: [...ALLOWED_CTAS] },
+          };
+        } else if (pixelTracker && pixelTracker.event === 'custom' && !pixelTracker.custom_event_name) {
+          nativeError = {
+            code: 'VALIDATION_ERROR',
+            message: 'pixel_tracker event=custom requires custom_event_name',
+            field: '/assets/pixel_tracker/custom_event_name',
+          };
+        }
+        if (nativeError) {
+          results.push({
+            creative_id: id,
+            action: 'failed',
+            errors: [{ ...nativeError, recovery: 'correctable' }],
+          } as unknown as SyncCreativesRow);
+          continue;
+        }
+      }
+
       // AdCP 3.1 provenance enforcement — product creative_policy declares
       // provenance_required: true, so creatives without a provenance object
       // get a per-creative `action: failed` with PROVENANCE_REQUIRED. Then,
