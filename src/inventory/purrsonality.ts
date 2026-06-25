@@ -1035,17 +1035,35 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       package_id: string;
       product_id: string;
       pricing_option_id: string;
-      creative_assignments: ReadonlyArray<{ creative_id: string }>;
+      creative_assignments?: ReadonlyArray<{ creative_id: string }>;
+      targeting_overlay?: {
+        property_list?: { agent_url: string; list_id: string };
+        collection_list?: { agent_url: string; list_id: string };
+      };
     }> = [];
     if (p.packages) {
       for (const pkgPatch of p.packages) {
         if (!pkgPatch.package_id) continue;
-        if (pkgPatch.creative_assignments === undefined) continue;
-        mockUpstream.setPackageCreativeAssignments(
-          buyId,
-          pkgPatch.package_id,
-          pkgPatch.creative_assignments,
-        );
+        const pkgPatchAny = pkgPatch as typeof pkgPatch & {
+          targeting_overlay?: {
+            property_list?: { agent_url?: string; list_id?: string };
+            collection_list?: { agent_url?: string; list_id?: string };
+          };
+        };
+        const hasCreativeAssignmentsPatch = pkgPatch.creative_assignments !== undefined;
+        const hasTargetingOverlayPatch = pkgPatchAny.targeting_overlay
+          && (pkgPatchAny.targeting_overlay.property_list?.list_id
+            || pkgPatchAny.targeting_overlay.collection_list?.list_id);
+        if (!hasCreativeAssignmentsPatch && !hasTargetingOverlayPatch) continue;
+
+        if (hasCreativeAssignmentsPatch) {
+          mockUpstream.setPackageCreativeAssignments(
+            buyId,
+            pkgPatch.package_id,
+            pkgPatch.creative_assignments!,
+          );
+        }
+
         // Prefer synth_packages (canonical multi-package allocation table)
         // for product_id + pricing_option_id lookup; fall back to legacy
         // prefix-strip + package_pricing_options for single-package buys.
@@ -1057,11 +1075,23 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         const pricingOptionId = synthHit?.pricing_option_id
           ?? existing.package_pricing_options?.[productId]
           ?? 'po_cpm_default';
+        // 3.1 inventory_list_targeting/update_swap_lists: include the
+        // post-update targeting_overlay snapshot on affected_packages so
+        // buyers see the replacement landed without a follow-up read.
+        const overlayAfterWrite = mockUpstream.getOrder(buyId)?.package_overlays?.[productId];
         affectedPackagesAcc.push({
           package_id: pkgPatch.package_id,
           product_id: productId,
           pricing_option_id: pricingOptionId,
-          creative_assignments: [...pkgPatch.creative_assignments],
+          ...(hasCreativeAssignmentsPatch && {
+            creative_assignments: [...(pkgPatch.creative_assignments ?? [])],
+          }),
+          ...(overlayAfterWrite && (overlayAfterWrite.property_list || overlayAfterWrite.collection_list) && {
+            targeting_overlay: {
+              ...(overlayAfterWrite.property_list && { property_list: overlayAfterWrite.property_list }),
+              ...(overlayAfterWrite.collection_list && { collection_list: overlayAfterWrite.collection_list }),
+            },
+          }),
         });
       }
     }
@@ -1844,12 +1874,15 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     // AdCP 3.1 filters — narrow before pagination.
     //   - creative_ids: explicit ID lookup (creative_fate_after_cancellation,
     //     creative_lifecycle).
-    //   - format_id: discovery by format (creative_lifecycle/list_and_filter).
+    //   - format_id (singular): legacy discovery by format
+    //   - format_ids (plural array of {agent_url, id}): 3.1
+    //     creative_lifecycle/list_and_filter buyer filter shape
     //   - statuses: status-scoped views (sandbox approve workflows).
     const filters = (req as {
       filters?: {
         creative_ids?: string[];
         format_id?: string | { id?: string };
+        format_ids?: ReadonlyArray<{ id?: string; agent_url?: string } | string>;
         statuses?: string[];
       };
     }).filters;
@@ -1863,10 +1896,26 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         normalized = normalized.filter((c) => c.format_id.id === wantedFormatId);
       }
     }
+    if (filters?.format_ids && filters.format_ids.length > 0) {
+      const wantedFormatIds = new Set(
+        filters.format_ids
+          .map((f) => (typeof f === 'string' ? f : f?.id))
+          .filter((s): s is string => typeof s === 'string'),
+      );
+      if (wantedFormatIds.size > 0) {
+        normalized = normalized.filter((c) => wantedFormatIds.has(c.format_id.id));
+      }
+    }
     if (filters?.statuses && filters.statuses.length > 0) {
       const wanted = new Set(filters.statuses);
       normalized = normalized.filter((c) => wanted.has(c.status));
     }
+    // 3.1 creative_lifecycle/list_and_filter expects creatives[0] to be
+    // the most recently synced creative ($context.synced_creative_id).
+    // Persistent rows precede mock rows in the merge above; sort by
+    // updated_date desc so the latest sync wins position 0 regardless of
+    // source.
+    normalized.sort((a, b) => (b.updated_date > a.updated_date ? 1 : b.updated_date < a.updated_date ? -1 : 0));
 
     const pageSize = Math.max(1, Math.min(100, r.pagination?.max_results ?? 100));
     const offset = Number.parseInt(r.pagination?.cursor ?? '0', 10) || 0;
