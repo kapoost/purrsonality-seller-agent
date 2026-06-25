@@ -1363,12 +1363,16 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           };
         }
         if (nativeError) {
-          results.push({
-            creative_id: id,
-            action: 'failed',
-            errors: [{ ...nativeError, recovery: 'correctable' }],
-          } as unknown as SyncCreativesRow);
-          continue;
+          // Storyboard's `expect_error: true` + `check: error_code` expects
+          // the whole sync_creatives call to fail with a top-level adcp_error
+          // envelope (not per-creative action: failed). Throw AdcpError so
+          // the SDK serialises it as the envelope's adcp_error field.
+          throw new AdcpError(nativeError.code, {
+            message: nativeError.message,
+            recovery: 'correctable',
+            ...(nativeError.field && { field: nativeError.field }),
+            ...(nativeError.details !== undefined && { details: nativeError.details as Record<string, unknown> }),
+          });
         }
       }
 
