@@ -458,7 +458,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     // format_ids and format_options whose v1_format_ref points at a
     // different id, surface FORMAT_DECLARATION_DIVERGENT (non-fatal
     // producer advisory).
-    const divergentErrors: Array<{ code: string; source: string; message: string }> = [];
+    const divergentErrors: Array<{ code: string; source: 'producer'; message: string }> = [];
     for (const p of raw) {
       if (!p.format_options || p.format_options.length === 0) continue;
       const opt0 = p.format_options[0] as { v1_format_ref?: Array<{ id?: string }> } | undefined;
