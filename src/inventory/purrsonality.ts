@@ -1306,6 +1306,13 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // green. See mockUpstream.hasSeededProductRequiringProvenance for
       // the asymmetric-default rationale.
       if (!provenance && mockUpstream.hasSeededProductRequiringProvenance()) {
+        // Still seed the creative so subsequent force_creative_status calls
+        // (e.g. 3.1 dependency_impairment's force_replacement_approved on
+        // acme_dep_banner_002) find it. The storyboard's
+        // provenance_enforcement track only checks `action: 'failed'` +
+        // error code — it doesn't probe library presence afterward, so
+        // seeding here doesn't regress that scenario.
+        mockUpstream.seedCreative(id, cAny, accountId);
         results.push({
           creative_id: id,
           action: 'failed',
