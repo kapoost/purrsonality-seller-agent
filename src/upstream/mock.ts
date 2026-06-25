@@ -577,7 +577,12 @@ export const mockUpstream = {
       resource_type: 'creative' as const,
       resource_id: creativeId,
       package_ids: [...entry.packageIds],
-      transition: { to: entry.status },
+      // transition.from = 'approved' (the baseline state every
+      // dependency_impairment scenario forces before transitioning to
+      // rejected). Spec says SHOULD include when known; AAO runner may
+      // require it for impairment.coherence even though the schema
+      // marks it optional.
+      transition: { from: 'approved', to: entry.status },
       // ImpairmentReasonCode enum: policy_violation | consent_expired |
       // ttl_expired | pii_audit_failed | seller_removed | content_rejected
       // | identity_authorization_revoked | identity_authorization_expired
