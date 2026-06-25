@@ -109,9 +109,33 @@ export const mockUpstream = {
       ...((overrides?.allowed_actions ?? prior?.allowed_actions) && {
         allowed_actions: overrides?.allowed_actions ?? prior?.allowed_actions,
       }),
+      ...((overrides?.creative_policy ?? prior?.creative_policy) && {
+        creative_policy: overrides?.creative_policy ?? prior?.creative_policy,
+      }),
     };
     seededProducts.set(id, product);
     return product;
+  },
+
+  /**
+   * Returns true when at least one seeded product (NOT a default catalog
+   * product) declares creative_policy.provenance_required: true. Used by
+   * syncCreatives to gate the PROVENANCE_REQUIRED rejection at the
+   * cheapest-buyer-mistake layer — a bare creative submission against an
+   * account that has the provenance_enforcement fixture in play.
+   *
+   * Default catalog products (purr_result_card_v1) also declare
+   * provenance_required: true, but historic 3.0 storyboards
+   * (creative_lifecycle, creative_fate_after_cancellation) submit bare
+   * creatives against those — checking only seeded fixtures keeps both
+   * lanes working.
+   */
+  hasSeededProductRequiringProvenance(): boolean {
+    for (const p of seededProducts.values()) {
+      const cp = p.creative_policy as { provenance_required?: boolean } | undefined;
+      if (cp?.provenance_required === true) return true;
+    }
+    return false;
   },
 
   seedCreative(id: string, fixture: Record<string, unknown>, accountId?: string): void {

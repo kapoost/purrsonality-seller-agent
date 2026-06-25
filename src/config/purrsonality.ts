@@ -69,6 +69,12 @@ export interface PurrProductConfig {
    * instead of `fixed_price`. Tracking the model lets getProducts emit
    * either shape depending on the comply fixture. */
   pricing_kind?: 'fixed' | 'floor';
+  /** Optional creative_policy override. AAO comply 3.1
+   * provenance_enforcement seeds a product with creative_policy declaring
+   * provenance_required/requirements/accepted_verifiers; getProducts
+   * surfaces it verbatim so the storyboard's policy-discovery phase
+   * passes. When unset, getProducts emits the default hardcoded policy. */
+  creative_policy?: Record<string, unknown>;
 }
 
 export const PRODUCTS: readonly PurrProductConfig[] = [

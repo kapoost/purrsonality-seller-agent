@@ -259,7 +259,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // creatives without provenance metadata are rejected in sync_creatives;
       // claims contradicted by the verifier are rejected with
       // PROVENANCE_CLAIM_CONTRADICTED.
-      (base as unknown as { creative_policy: Record<string, unknown> }).creative_policy = {
+      //
+      // Seeded products with their own creative_policy (e.g. fixture
+      // `test-product-disclosure-required` for provenance_enforcement
+      // storyboard) override the default — the runner asserts specific
+      // values from the fixture so we must pass them through verbatim.
+      (base as unknown as { creative_policy: Record<string, unknown> }).creative_policy = p.creative_policy ?? {
         co_branding: 'optional',
         landing_page: 'any',
         templates_available: false,
@@ -1115,17 +1120,38 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
 
       const ENCYPHER_VERIFIER_URL = 'https://governance.encypher.seller.example';
 
+      // PROVENANCE_REQUIRED gate — fires ONLY when a SEEDED product
+      // (not a default catalog product) declares
+      // creative_policy.provenance_required: true. AAO 3.1
+      // provenance_enforcement seeds `test-product-disclosure-required`
+      // with that policy and expects the bare-creative submission to
+      // surface PROVENANCE_REQUIRED. Default catalog products also have
+      // the flag but historic 3.0 storyboards (creative_lifecycle,
+      // creative_fate_after_cancellation) submit bare creatives against
+      // them — checking only the seeded fixtures keeps both lanes
+      // green. See mockUpstream.hasSeededProductRequiringProvenance for
+      // the asymmetric-default rationale.
+      if (!provenance && mockUpstream.hasSeededProductRequiringProvenance()) {
+        results.push({
+          creative_id: id,
+          action: 'failed',
+          errors: [
+            {
+              code: 'PROVENANCE_REQUIRED',
+              message: 'creative.provenance is required by the seller policy',
+              field: '/provenance',
+              recovery: 'correctable',
+            },
+          ],
+        } as unknown as SyncCreativesRow);
+        continue;
+      }
+
       // Provenance is opt-in at the per-creative level: when the buyer supplies
       // the field we enforce the full validation chain below (off-list verifier,
       // DST, disclosure, contradicted-claim). Buyers that don't supply provenance
-      // fall through to the regular submission flow. Storyboards that test
-      // "PROVENANCE_REQUIRED when policy demands it" will not pass against this
-      // seller — by design: the 3.0 conformance suite (which CI tracks against
-      // its ≥131 baseline) covers creative_fate_after_cancellation, creative_lifecycle,
-      // and other scenarios that submit bare creatives, and a hard
-      // PROVENANCE_REQUIRED gate breaks those entire storyboard chains. The
-      // structural enforcement paths (DST/disclosure/contradicted/off-list)
-      // remain so 3.1 storyboards that DO supply provenance still grade fairly.
+      // and there's no seeded provenance-requiring product fall through to the
+      // regular submission flow.
       if (!provenance) {
         // Keep mockUpstream + creativesStore in sync via the normal path below.
         mockUpstream.seedCreative(id, cAny, accountId);

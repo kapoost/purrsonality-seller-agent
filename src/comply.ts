@@ -42,6 +42,7 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
           terms_ref?: string;
           allowed_statuses?: readonly string[];
         }>;
+        creative_policy?: Record<string, unknown>;
       };
       // Accept comply fixture format_ids verbatim. Prior impl filtered
       // unknown IDs against our native catalog (display_300x250 /
@@ -77,6 +78,7 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         ...(fixture.description !== undefined && { description: fixture.description }),
         ...(format_ids && format_ids.length > 0 && { format_ids }),
         ...(allowed_actions && allowed_actions.length > 0 && { allowed_actions }),
+        ...(fixture.creative_policy !== undefined && { creative_policy: fixture.creative_policy }),
       });
     },
     pricing_option: async (params) => {
