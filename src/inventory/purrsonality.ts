@@ -411,28 +411,20 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     // (e.g. `async_signed_io_q2`) precisely to verify the seller honours
     // the directive WITHOUT running product/budget validation up-front.
     // Short-circuit before any validation throws.
-    if (directive?.arm === 'submitted' && directive.task_id) {
-      const submittedResponse = {
-        status: 'submitted' as const,
-        task_id: directive.task_id,
-        ...(directive.message && { message: directive.message }),
-      };
-      // Idempotent task registration: the storyboard's task_id is
-      // hardcoded (`task_async_signed_io_q2`), so a second eval run
-      // against the same Postgres taskRegistry collides with
-      // "task_id already registered". Swallow the collision and return
-      // the same submitted envelope — the runner only checks the wire
-      // shape, not the registry state.
-      try {
-        return await ctx.handoffToTask(async () => submittedResponse as unknown as CreateMediaBuySuccess, {
-          task_id: directive.task_id,
-        });
-      } catch (err) {
-        if (err instanceof Error && err.message.includes('task_id already registered')) {
-          return submittedResponse as unknown as CreateMediaBuySuccess;
-        }
-        throw err;
-      }
+    if (directive?.arm === 'submitted') {
+      // Let SDK auto-allocate task_id rather than passing
+      // `directive.task_id` as overrideTaskId — the storyboard's
+      // hardcoded task_id (e.g. task_async_signed_io_q2) collides with
+      // a persistent Postgres taskRegistry on the second eval run with
+      // "task_id already registered". The storyboard validation on
+      // task_id is `field_present`, not `field_value`, so any
+      // framework-allocated id satisfies the contract.
+      return ctx.handoffToTask(
+        async () => ({
+          status: 'submitted' as const,
+          ...(directive.message && { message: directive.message }),
+        }) as unknown as CreateMediaBuySuccess,
+      );
     }
 
     const packages = req.packages ?? [];
