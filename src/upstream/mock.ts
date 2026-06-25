@@ -566,7 +566,15 @@ export const mockUpstream = {
       resource_id: creativeId,
       package_ids: [...entry.packageIds],
       transition: { to: entry.status },
-      reason_code: entry.reason ?? 'CREATIVE_REJECTED',
+      // ImpairmentReasonCode enum: policy_violation | consent_expired |
+      // ttl_expired | pii_audit_failed | seller_removed | content_rejected
+      // | identity_authorization_revoked | identity_authorization_expired
+      // | source_private | source_offline | property_depublished.
+      // `content_rejected` is the canonical code for a creative that
+      // failed review; the storyboard's free-text `rejection_reason`
+      // ride on the `reason` field (separate from reason_code).
+      reason_code: 'content_rejected' as const,
+      ...(entry.reason && { reason: entry.reason }),
       observed_at: entry.observedAt,
     }));
   },
