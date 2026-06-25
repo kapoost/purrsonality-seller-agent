@@ -206,6 +206,20 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
   },
 
   force: {
+    upstream_unavailable: async (params) => {
+      // 3.1 stale_response_advisory storyboard — mark the named upstream
+      // unreachable for subsequent `tool` calls. The follow-up get_products
+      // call detects this state and rides STALE_RESPONSE in errors[] on a
+      // populated success response (transport stays success). No real cache
+      // — we satisfy wire-shape semantics, not freshness math.
+      const prior = mockUpstream.getUnavailableUpstream(params.tool);
+      mockUpstream.markUpstreamUnavailable(params.tool, params.upstream_name);
+      return {
+        success: true as const,
+        previous_state: prior ? 'unavailable' : 'available',
+        current_state: 'unavailable',
+      };
+    },
     create_media_buy_arm: async (params) => {
       const accountId = `sandbox_${PUBLISHER.network_code}`;
       // The storyboard's `field_value` assertion on `task_id` demands the

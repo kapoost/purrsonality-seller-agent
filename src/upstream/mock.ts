@@ -74,6 +74,16 @@ export interface CreateMediaBuyDirective {
 
 const createMediaBuyDirectives = new Map<string, CreateMediaBuyDirective>();
 
+// 3.1 stale_response_advisory — when comply_test_controller's
+// force_upstream_unavailable scenario fires, we mark the named upstream
+// unreachable for subsequent calls. Each entry stores the tool the
+// directive targeted (e.g. `get_products`) and the timestamp the
+// controller flipped the state. The latter is surfaced as
+// `cache_age_seconds` on STALE_RESPONSE.details so buyers can reason
+// about staleness without us actually maintaining a real cache (the
+// storyboard validates wire-shape, not freshness math).
+const unavailableUpstreams = new Map<string, { upstream_name?: string; since: number }>();
+
 function generateOrderId(): string {
   return `mb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -93,6 +103,14 @@ export const mockUpstream = {
 
   hasSeededProducts(): boolean {
     return seededProducts.size > 0;
+  },
+
+  markUpstreamUnavailable(tool: string, upstreamName?: string): void {
+    unavailableUpstreams.set(tool, { since: Date.now(), ...(upstreamName && { upstream_name: upstreamName }) });
+  },
+
+  getUnavailableUpstream(tool: string): { upstream_name?: string; since: number } | undefined {
+    return unavailableUpstreams.get(tool);
   },
 
   getProduct(id: string): PurrProductConfig | undefined {

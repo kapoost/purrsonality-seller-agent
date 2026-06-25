@@ -372,6 +372,26 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       };
     };
 
+    // 3.1 stale_response_advisory — when force_upstream_unavailable has
+    // marked the get_products upstream offline, ride STALE_RESPONSE in
+    // errors[] on the populated success response. Transport stays success
+    // (HTTP 200, no envelope adcp_error); the advisory carries
+    // served_from_cache + cache_age_seconds in details for buyer triage.
+    const staleUpstream = mockUpstream.getUnavailableUpstream('get_products');
+    const staleErrors = staleUpstream
+      ? [
+          {
+            code: 'STALE_RESPONSE',
+            message: 'Upstream dependency unreachable; serving cached product list past freshness target.',
+            details: {
+              served_from_cache: true,
+              cache_age_seconds: Math.max(0, Math.floor((Date.now() - staleUpstream.since) / 1000)),
+              ...(staleUpstream.upstream_name && { upstream: { name: staleUpstream.upstream_name } }),
+            },
+          },
+        ]
+      : undefined;
+
     if (r.buying_mode === 'brief' && r.brief && products.length > 0) {
       // Two distinct proposals per brief — PR #4946 multi-finalize storyboard
       // captures proposals[0] and proposals[1] from a single response to
@@ -381,6 +401,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         products,
         proposals: [generateProposal(undefined, false, '_a'), generateProposal(undefined, false, '_b')],
         cache_scope: 'public' as const,
+        ...(staleErrors && { errors: staleErrors }),
       } satisfies GetProductsPayload;
     }
 
@@ -452,10 +473,15 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         proposals: proposals.length > 0 ? proposals : [generateProposal()],
         refinement_applied,
         cache_scope: 'public' as const,
+        ...(staleErrors && { errors: staleErrors }),
       } satisfies GetProductsPayload;
     }
 
-    return { products, cache_scope: 'public' as const } satisfies GetProductsPayload;
+    return {
+      products,
+      cache_scope: 'public' as const,
+      ...(staleErrors && { errors: staleErrors }),
+    } satisfies GetProductsPayload;
   },
 
   async createMediaBuy(req: CreateMediaBuyRequest, ctx) {
