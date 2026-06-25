@@ -430,12 +430,15 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     if (rTop.start_time && rTop.end_time && isIsoTime(rTop.start_time) && isIsoTime(rTop.end_time) && rTop.start_time > rTop.end_time) {
       throw new AdcpError('VALIDATION_ERROR', { message: 'start_time must be before end_time', field: '/end_time' });
     }
-    // Reject past-start flights. AAO 3.1-rc schema_validation/past_start_rejection
-    // expects INVALID_REQUEST when start_time is in the past. We allow a small
-    // grace window (clock skew across SDK/buyer/seller) so legitimately
-    // immediate flights aren't rejected — comply runner emits start_time years
-    // in the past so even 1-hour grace catches the test.
-    const PAST_GRACE_MS = 60 * 60 * 1000; // 1h
+    // Reject FAR-past start flights. AAO 3.1-rc schema_validation/past_start_rejection
+    // narrative is explicitly "years in the past" — comply runner sends
+    // `start_time: 2020-01-01T00:00:00Z` to probe. Other test fixtures
+    // (deterministic_testing, persistence storyboards) routinely use start_time
+    // ~3 months in the past relative to current eval date to model historical
+    // flights; rejecting THOSE breaks the unrelated tests. Calibrate grace to
+    // 365 days so we catch the past_start storyboard ("years") without
+    // tripping the historical-flight fixtures ("months").
+    const PAST_GRACE_MS = 365 * 24 * 60 * 60 * 1000; // 1 year
     if (rTop.start_time && isIsoTime(rTop.start_time)) {
       const startTs = Date.parse(rTop.start_time);
       if (Number.isFinite(startTs) && startTs < Date.now() - PAST_GRACE_MS) {
