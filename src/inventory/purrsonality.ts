@@ -192,13 +192,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     };
     // 3.1 pricing_currency_filter is the only storyboard that asserts
     // `products[0].product_id` + `field_absent: products[1]` against a
-    // seeded fixture — and seededProducts is GLOBAL state across the
-    // whole eval session, so unconditionally hiding the hardcoded catalog
-    // whenever any seed exists broke brief-discovery storyboards that
-    // run after a seeding scenario (dependency_impairment,
-    // creative_fate_after_cancellation, invalid_transitions, …). Gate
-    // the hide on `filters.pricing_currencies` being set — the explicit
-    // signal that the buyer wants the seeded multi-currency surface.
+    // seeded fixture. seededProducts is GLOBAL state across the whole
+    // eval session — by the time pricing_currency_filter runs, every
+    // earlier scenario's seeded products are also present. Narrow to:
+    // sandbox + filter set + ONLY products carrying
+    // signal_targeting_options (the pricing_currency_filter fixture
+    // marker; other seeded products don't expose this surface).
     const isSandbox = (ctx.account as { mode?: string } | undefined)?.mode === 'sandbox';
     const seededOnly = isSandbox
       && mockUpstream.hasSeededProducts()
@@ -213,7 +212,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     // `allowed_actions[]` surface through $context.product_id.
     const briefLc = (r.brief ?? '').toLowerCase();
     let raw = (seededOnly
-      ? [...mockUpstream.listSeededProducts()]
+      ? [...mockUpstream.listSeededProducts()].filter((p) => Array.isArray(p.signal_targeting_options) && p.signal_targeting_options.length > 0)
       : [...mockUpstream.listProducts()]
     ).sort((a, b) => {
       const aHit = briefLc && briefLc.includes(a.product_id.replace(/_/g, ' ').toLowerCase());
@@ -383,7 +382,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     // errors[] on the populated success response. Transport stays success
     // (HTTP 200, no envelope adcp_error); the advisory carries
     // served_from_cache + cache_age_seconds in details for buyer triage.
-    const staleUpstream = mockUpstream.getUnavailableUpstream('get_products');
+    const staleUpstream = mockUpstream.consumeUnavailableUpstream('get_products');
     const staleErrors = staleUpstream
       ? [
           {

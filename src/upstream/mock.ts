@@ -122,8 +122,20 @@ export const mockUpstream = {
     unavailableUpstreams.set(tool, { since: Date.now(), ...(upstreamName && { upstream_name: upstreamName }) });
   },
 
-  getUnavailableUpstream(tool: string): { upstream_name?: string; since: number } | undefined {
-    return unavailableUpstreams.get(tool);
+  hasUnavailableUpstream(tool: string): boolean {
+    return unavailableUpstreams.has(tool);
+  },
+
+  /** Single-use consumption — the storyboard's stale_response_wire_placement
+   * step calls get_products exactly once after the directive is staged; we
+   * pop the entry so subsequent get_products on the same eval session don't
+   * leak STALE_RESPONSE into unrelated storyboards' response shapes (the
+   * non_emission_guard check expects no STALE_RESPONSE on a healthy
+   * upstream, and AAO eval state is global across all scenarios). */
+  consumeUnavailableUpstream(tool: string): { upstream_name?: string; since: number } | undefined {
+    const entry = unavailableUpstreams.get(tool);
+    if (entry) unavailableUpstreams.delete(tool);
+    return entry;
   },
 
   getProduct(id: string): PurrProductConfig | undefined {

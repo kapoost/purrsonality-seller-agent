@@ -212,11 +212,11 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
       // call detects this state and rides STALE_RESPONSE in errors[] on a
       // populated success response (transport stays success). No real cache
       // — we satisfy wire-shape semantics, not freshness math.
-      const prior = mockUpstream.getUnavailableUpstream(params.tool);
+      const wasUnavailable = mockUpstream.hasUnavailableUpstream(params.tool);
       mockUpstream.markUpstreamUnavailable(params.tool, params.upstream_name);
       return {
         success: true as const,
-        previous_state: prior ? 'unavailable' : 'available',
+        previous_state: wasUnavailable ? 'unavailable' : 'available',
         current_state: 'unavailable',
       };
     },
