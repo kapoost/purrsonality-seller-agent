@@ -454,6 +454,25 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         ]
       : undefined;
 
+    // 3.1 canonical_formats divergent — when a returned product has
+    // format_ids and format_options whose v1_format_ref points at a
+    // different id, surface FORMAT_DECLARATION_DIVERGENT (non-fatal
+    // producer advisory).
+    const divergentErrors: Array<{ code: string; source: string; message: string }> = [];
+    for (const p of raw) {
+      if (!p.format_options || p.format_options.length === 0) continue;
+      const opt0 = p.format_options[0] as { v1_format_ref?: Array<{ id?: string }> } | undefined;
+      const v1Ref = opt0?.v1_format_ref?.[0]?.id;
+      const fid0 = p.format_id_refs?.[0]?.id ?? p.format_ids?.[0];
+      if (v1Ref && fid0 && v1Ref !== fid0) {
+        divergentErrors.push({
+          code: 'FORMAT_DECLARATION_DIVERGENT',
+          source: 'producer',
+          message: `Product ${p.product_id} format_ids (${fid0}) and format_options[0].v1_format_ref (${v1Ref}) disagree.`,
+        });
+      }
+    }
+
     if (r.buying_mode === 'brief' && r.brief && products.length > 0) {
       // Two distinct proposals per brief — PR #4946 multi-finalize storyboard
       // captures proposals[0] and proposals[1] from a single response to
@@ -539,10 +558,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       } satisfies GetProductsPayload;
     }
 
+    const combinedErrors = [
+      ...(divergentErrors.length > 0 ? divergentErrors : []),
+      ...(staleErrors ?? []),
+    ];
     return {
       products,
       cache_scope: 'public' as const,
-      ...(staleErrors && { errors: staleErrors }),
+      ...(combinedErrors.length > 0 && { errors: combinedErrors }),
     } satisfies GetProductsPayload;
   },
 
