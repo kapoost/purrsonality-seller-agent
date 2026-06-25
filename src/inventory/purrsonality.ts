@@ -170,6 +170,15 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       refine?: Array<{ scope?: string; proposal_id?: string; product_id?: string; action?: string }>;
       filters?: {
         pricing_currencies?: readonly string[];
+        // 3.1 canonical_formats isolation — buyer narrows to a seeded
+        // product carrying a specific (vendor, metric_id) pair on its
+        // reporting_capabilities.vendor_metrics.
+        required_vendor_metrics?: ReadonlyArray<{
+          vendor?: { domain?: string };
+          metric_id?: string;
+        }>;
+        channels?: readonly string[];
+        delivery_type?: string;
       };
     };
     // 3.1 pricing_currency_filter is the only storyboard that asserts
@@ -202,6 +211,31 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       if (aHit === bHit) return 0;
       return aHit ? -1 : 1;
     });
+    // 3.1 canonical_formats isolation — required_vendor_metrics narrows
+    // to the seeded product carrying a matching (vendor, metric_id) on
+    // its reporting_capabilities.vendor_metrics. Filter ALL products,
+    // including the seeded canonical-format fixtures that store the
+    // vendor_metric on PurrProductConfig.vendor_metrics.
+    const wantedVendorMetrics = r.filters?.required_vendor_metrics;
+    if (wantedVendorMetrics && wantedVendorMetrics.length > 0) {
+      raw = raw.filter((p) => {
+        const productMetrics = p.vendor_metrics ?? [];
+        return wantedVendorMetrics.every((req) => productMetrics.some((pm) =>
+          (!req.vendor?.domain || pm.vendor.domain === req.vendor.domain)
+          && (!req.metric_id || pm.metric_id === req.metric_id)
+        ));
+      });
+    }
+    // Channel + delivery_type filters (3.1 canonical_formats requests both).
+    const wantedChannels = r.filters?.channels;
+    if (wantedChannels && wantedChannels.length > 0) {
+      raw = raw.filter((p) => wantedChannels.includes(p.channel));
+    }
+    const wantedDeliveryType = r.filters?.delivery_type;
+    if (wantedDeliveryType) {
+      raw = raw.filter((p) => (p.delivery_type ?? 'non_guaranteed') === wantedDeliveryType);
+    }
+
     // 3.1 pricing_currency_filter — match against product-level pricing_options
     // AND mandatory product-scoped signal pricing. Optional signal pricing is
     // explicitly out of scope (spec: "Buyers remain responsible for avoiding
@@ -330,6 +364,26 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       }
       if (p.signal_targeting_options) {
         (base as unknown as { signal_targeting_options: unknown }).signal_targeting_options = p.signal_targeting_options;
+      }
+      // 3.1 canonical_formats fixture echo — surfaces format_options[]
+      // (canonical v2), publisher_properties[], delivery_type, and
+      // overrides vendor_metrics when seeded. Storyboards isolate seeded
+      // products via filters.required_vendor_metrics matching these.
+      if (p.format_options) {
+        (base as unknown as { format_options: unknown }).format_options = p.format_options;
+      }
+      if (p.publisher_properties) {
+        (base as unknown as { publisher_properties: unknown }).publisher_properties = p.publisher_properties;
+      }
+      if (p.delivery_type) {
+        (base as unknown as { delivery_type: string }).delivery_type = p.delivery_type;
+      }
+      if (p.vendor_metrics) {
+        const reporting = (base as unknown as { reporting_capabilities?: Record<string, unknown> }).reporting_capabilities ?? {};
+        (base as unknown as { reporting_capabilities: Record<string, unknown> }).reporting_capabilities = {
+          ...reporting,
+          vendor_metrics: p.vendor_metrics,
+        };
       }
       return base;
     });

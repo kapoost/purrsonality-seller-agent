@@ -188,6 +188,18 @@ export const mockUpstream = {
       ...((overrides?.signal_targeting_options ?? prior?.signal_targeting_options) && {
         signal_targeting_options: overrides?.signal_targeting_options ?? prior?.signal_targeting_options,
       }),
+      ...((overrides?.format_options ?? prior?.format_options) && {
+        format_options: overrides?.format_options ?? prior?.format_options,
+      }),
+      ...((overrides?.publisher_properties ?? prior?.publisher_properties) && {
+        publisher_properties: overrides?.publisher_properties ?? prior?.publisher_properties,
+      }),
+      ...((overrides?.delivery_type ?? prior?.delivery_type) && {
+        delivery_type: overrides?.delivery_type ?? prior?.delivery_type,
+      }),
+      ...((overrides?.vendor_metrics ?? prior?.vendor_metrics) && {
+        vendor_metrics: overrides?.vendor_metrics ?? prior?.vendor_metrics,
+      }),
     };
     seededProducts.set(id, product);
     return product;

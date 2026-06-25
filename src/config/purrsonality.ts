@@ -113,6 +113,21 @@ export interface PurrProductConfig {
       cpm?: number;
     }>;
   }>;
+  /** 3.1 canonical_formats — dual-emission format declarations.
+   * Stored verbatim from comply seed.product; getProducts surfaces both
+   * legacy format_ids and canonical format_options so buyers can pick
+   * either migration shape. */
+  format_options?: ReadonlyArray<Record<string, unknown>>;
+  /** 3.1 canonical_formats fixture also seeds publisher_properties[],
+   * delivery_type override, and a vendor_metric specific to the test
+   * (used by filters.required_vendor_metrics to isolate the seeded
+   * product among the global catalog). */
+  publisher_properties?: ReadonlyArray<Record<string, unknown>>;
+  delivery_type?: string;
+  vendor_metrics?: ReadonlyArray<{
+    vendor: { domain: string };
+    metric_id: string;
+  }>;
 }
 
 export const PRODUCTS: readonly PurrProductConfig[] = [

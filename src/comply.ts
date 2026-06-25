@@ -64,6 +64,12 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
             cpm?: number;
           }>;
         }>;
+        // 3.1 canonical_formats fixture fields — passed through to
+        // PurrProductConfig + emitted verbatim by getProducts.
+        format_options?: ReadonlyArray<Record<string, unknown>>;
+        publisher_properties?: ReadonlyArray<Record<string, unknown>>;
+        delivery_type?: string;
+        reporting_capabilities?: { vendor_metrics?: ReadonlyArray<{ vendor: { domain: string }; metric_id: string }> };
       };
       // Accept comply fixture format_ids verbatim. Prior impl filtered
       // unknown IDs against our native catalog (display_300x250 /
@@ -108,6 +114,18 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         }),
         ...(fixture.signal_targeting_options !== undefined && {
           signal_targeting_options: fixture.signal_targeting_options,
+        }),
+        ...(fixture.format_options !== undefined && {
+          format_options: fixture.format_options,
+        }),
+        ...(fixture.publisher_properties !== undefined && {
+          publisher_properties: fixture.publisher_properties,
+        }),
+        ...(fixture.delivery_type !== undefined && {
+          delivery_type: fixture.delivery_type,
+        }),
+        ...(fixture.reporting_capabilities?.vendor_metrics !== undefined && {
+          vendor_metrics: fixture.reporting_capabilities.vendor_metrics,
         }),
       });
     },
