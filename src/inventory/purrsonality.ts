@@ -1226,6 +1226,19 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         continue;
       }
 
+      // Resolve effective provenance_requirements. AAO 3.1
+      // provenance_enforcement seeds a fixture WITHOUT
+      // require_embedded_provenance — only DST + disclosure are
+      // required. Default catalog products require all three. Honour
+      // seeded fixtures verbatim so the storyboard's reject_missing_disclosure
+      // step surfaces PROVENANCE_DISCLOSURE_MISSING instead of our
+      // EMBEDDED_MISSING (which fires for default products that DO
+      // require it).
+      const seededReqs = mockUpstream.getSeededProvenanceRequirements();
+      const requireEmbedded = seededReqs
+        ? seededReqs.require_embedded_provenance === true
+        : true; // default catalog policy requires embedded
+
       // provenance_requirements.require_embedded_provenance=true on the
       // product creative_policy → submissions whose provenance lacks the
       // embedded_provenance[] block are rejected with PROVENANCE_EMBEDDED_MISSING.
@@ -1238,8 +1251,9 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         embedded_provenance?: unknown[];
       };
       if (
-        !Array.isArray(provenanceWithEmbedded.embedded_provenance) ||
-        provenanceWithEmbedded.embedded_provenance.length === 0
+        requireEmbedded &&
+        (!Array.isArray(provenanceWithEmbedded.embedded_provenance) ||
+          provenanceWithEmbedded.embedded_provenance.length === 0)
       ) {
         results.push({
           creative_id: id,

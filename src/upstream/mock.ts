@@ -138,6 +138,36 @@ export const mockUpstream = {
     return false;
   },
 
+  /**
+   * Returns the effective creative_policy.provenance_requirements when a
+   * seeded product with provenance_required: true is in scope; null
+   * otherwise. The 3.1 provenance_enforcement fixture seeds a product
+   * whose requirements omit `require_embedded_provenance` — our
+   * hardcoded default DOES require embedded. Reading the seeded
+   * requirements lets sync_creatives surface the spec-correct error
+   * (DISCLOSURE_MISSING) instead of our default's EMBEDDED_MISSING.
+   */
+  getSeededProvenanceRequirements(): {
+    require_digital_source_type?: boolean;
+    require_embedded_provenance?: boolean;
+    require_disclosure_metadata?: boolean;
+  } | null {
+    for (const p of seededProducts.values()) {
+      const cp = p.creative_policy as {
+        provenance_required?: boolean;
+        provenance_requirements?: {
+          require_digital_source_type?: boolean;
+          require_embedded_provenance?: boolean;
+          require_disclosure_metadata?: boolean;
+        };
+      } | undefined;
+      if (cp?.provenance_required === true && cp.provenance_requirements) {
+        return cp.provenance_requirements;
+      }
+    }
+    return null;
+  },
+
   seedCreative(id: string, fixture: Record<string, unknown>, accountId?: string): void {
     seededCreatives.set(id, { ...fixture, creative_id: id, _account_id: accountId });
   },
