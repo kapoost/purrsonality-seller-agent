@@ -663,10 +663,18 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
 
     const buyerContext = (req as { context?: { correlation_id?: string; buyer_ref?: string } }).context;
     const packageContexts: Record<string, { correlation_id?: string; buyer_ref?: string }> = {};
+    const packagePricingOptions: Record<string, string> = {};
     for (const pkg of packages) {
       const pkgCtx = (pkg as { context?: { correlation_id?: string; buyer_ref?: string } }).context;
       if (pkgCtx && Object.keys(pkgCtx).length > 0) {
         packageContexts[pkg.product_id] = pkgCtx;
+      }
+      // Capture buyer-supplied pricing_option_id per package so
+      // get_media_buys + update_media_buy round-trip the exact id
+      // captured from get_products. Required by 3.1 dependency_impairment
+      // assertions on affected_packages[*].pricing_option_id.
+      if (pkg.pricing_option_id) {
+        packagePricingOptions[pkg.product_id] = pkg.pricing_option_id;
       }
     }
 
@@ -686,6 +694,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       status: hasAnyCreatives ? 'confirmed' : 'pending_creatives',
       ...(buyerContext && Object.keys(buyerContext).length > 0 && { context: buyerContext }),
       ...(Object.keys(packageContexts).length > 0 && { package_contexts: packageContexts }),
+      ...(Object.keys(packagePricingOptions).length > 0 && { package_pricing_options: packagePricingOptions }),
     });
 
     for (const [productId, overlay] of overlayMap.entries()) {
@@ -742,7 +751,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       canceled?: true;
       cancellation_reason?: string;
       end_time?: string;
-      packages?: Array<{ package_id?: string; paused?: boolean; budget?: number }>;
+      packages?: Array<{
+        package_id?: string;
+        paused?: boolean;
+        budget?: number;
+        creative_assignments?: ReadonlyArray<{ creative_id: string }>;
+      }>;
     };
 
     if (existing.status === 'canceled' && p.canceled === true) {
@@ -861,6 +875,40 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       }
     }
 
+    // 3.1 dependency_impairment — persist creative_assignments[] with
+    // replacement semantics and compute affected_packages[] for the
+    // response. update_media_buy is one of the two canonical surfaces for
+    // creative ↔ package binding (the other being inline
+    // sync_creatives.assignments[]); both flow through the same
+    // package_creative_assignments map.
+    const affectedPackagesAcc: Array<{
+      package_id: string;
+      product_id: string;
+      pricing_option_id: string;
+      creative_assignments: ReadonlyArray<{ creative_id: string }>;
+    }> = [];
+    if (p.packages) {
+      for (const pkgPatch of p.packages) {
+        if (!pkgPatch.package_id) continue;
+        if (pkgPatch.creative_assignments === undefined) continue;
+        mockUpstream.setPackageCreativeAssignments(
+          buyId,
+          pkgPatch.package_id,
+          pkgPatch.creative_assignments,
+        );
+        const productId = pkgPatch.package_id.startsWith(`${buyId}_`)
+          ? pkgPatch.package_id.slice(`${buyId}_`.length)
+          : pkgPatch.package_id;
+        const pricingOptionId = existing.package_pricing_options?.[productId] ?? 'po_cpm_default';
+        affectedPackagesAcc.push({
+          package_id: pkgPatch.package_id,
+          product_id: productId,
+          pricing_option_id: pricingOptionId,
+          creative_assignments: [...pkgPatch.creative_assignments],
+        });
+      }
+    }
+
     const updated = mockUpstream.getOrder(buyId)!;
     const newWireStatus = mockToWireStatus(updated.status);
     const postAvailableActions = filterByStatus(buyAllActions, newWireStatus);
@@ -871,6 +919,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       ...(postAvailableActions.length > 0 && { available_actions: postAvailableActions }),
       ...(updated.canceled_by && { canceled_by: updated.canceled_by }),
       ...(updated.canceled_at && { canceled_at: updated.canceled_at }),
+      ...(affectedPackagesAcc.length > 0 && { affected_packages: affectedPackagesAcc }),
       revision: 2,
     } as unknown as UpdateMediaBuySuccess;
   },
@@ -1075,13 +1124,16 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           // depends on these being present on canceled buys.
           ...(o.canceled_by && { canceled_by: o.canceled_by }),
           ...(o.canceled_at && { canceled_at: o.canceled_at }),
-          // AdCP 3.1 dependency_impairment baseline: `health: 'ok'` and an
-          // empty impairments[] until creative_status / upstream_unavailable
-          // forces an impaired transition. Purrsonality doesn't track
-          // resource-level health internally; the baseline is sufficient for
-          // current storyboards.
-          health: 'ok',
-          impairments: [],
+          // 3.1 dependency_impairment — health is `impaired` iff at least
+          // one creative assigned to one of this buy's packages is in an
+          // offline status (rejected today; spec may extend). Recovery
+          // path: unbind the offline creative via
+          // update_media_buy.packages[].creative_assignments[] swap.
+          health: (() => {
+            const imp = mockUpstream.computeImpairmentsForOrder(o.order_id);
+            return imp.length > 0 ? 'impaired' : 'ok';
+          })(),
+          impairments: mockUpstream.computeImpairmentsForOrder(o.order_id),
           // Package projection precedence: seeded_packages (full overrides
           // via comply seed_media_buy) → legacy_packages (3.1
           // package_correlation_legacy_fallback, package_id+context only,
@@ -1108,11 +1160,13 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
             : o.product_ids.map((pid) => {
             const overlay = o.package_overlays?.[pid];
             const pkgContext = o.package_contexts?.[pid];
+            const packageId = `${o.order_id}_${pid}`;
+            const creativeAssignments = o.package_creative_assignments?.[packageId];
             return {
-              package_id: `${o.order_id}_${pid}`,
+              package_id: packageId,
               product_id: pid,
               budget: o.package_budgets?.[pid] ?? 0,
-              pricing_option_id: 'po_cpm_default',
+              pricing_option_id: o.package_pricing_options?.[pid] ?? 'po_cpm_default',
               pacing: 'even',
               ...(pkgContext && { context: pkgContext }),
               status: o.status === 'completed' || o.status === 'canceled' ? 'completed' : 'active',
@@ -1122,6 +1176,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
                   ...(overlay.collection_list && { collection_list: overlay.collection_list }),
                 },
               }),
+              ...(creativeAssignments && creativeAssignments.length > 0 && { creative_assignments: creativeAssignments }),
             };
           }),
         };

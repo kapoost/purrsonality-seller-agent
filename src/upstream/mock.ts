@@ -39,6 +39,19 @@ export interface MockOrder {
     budget?: number;
     context?: { buyer_ref?: string; correlation_id?: string };
   }>;
+  // 3.1 dependency_impairment — per-package creative bindings written by
+  // update_media_buy({packages[].creative_assignments[]}) with replacement
+  // semantics. The full list replaces the prior one on every write; reads
+  // surface them on the package response shape and drive impairment
+  // computation against per-creative status state.
+  package_creative_assignments?: Record<string, ReadonlyArray<{ creative_id: string }>>;
+  // Per-package pricing_option_id captured at create_media_buy time. The
+  // 3.1 dependency_impairment storyboard asserts the
+  // affected_packages[*].pricing_option_id round-trips the
+  // $context.pricing_option_id captured from get_products; package
+  // responses must echo the original buyer-supplied option, not a
+  // hardcoded default.
+  package_pricing_options?: Record<string, string>;
 }
 
 export interface PackageOverlay {
@@ -280,6 +293,7 @@ export const mockUpstream = {
     status?: MockOrder['status'];
     context?: { correlation_id?: string; buyer_ref?: string };
     package_contexts?: Record<string, { correlation_id?: string; buyer_ref?: string }>;
+    package_pricing_options?: Record<string, string>;
   }): MockOrder {
     if (args.client_request_id) {
       const existing = requestKey.get(args.client_request_id);
@@ -306,6 +320,9 @@ export const mockUpstream = {
       ...(args.context && Object.keys(args.context).length > 0 && { context: { ...args.context } }),
       ...(args.package_contexts && Object.keys(args.package_contexts).length > 0 && {
         package_contexts: { ...args.package_contexts },
+      }),
+      ...(args.package_pricing_options && Object.keys(args.package_pricing_options).length > 0 && {
+        package_pricing_options: { ...args.package_pricing_options },
       }),
     };
 
@@ -365,6 +382,28 @@ export const mockUpstream = {
     if (!o) return;
     o.package_overlays = o.package_overlays ?? {};
     o.package_overlays[productId] = { ...(o.package_overlays[productId] ?? {}), ...overlay };
+  },
+
+  /** 3.1 dependency_impairment — replacement semantics on package
+   * creative_assignments. Full list replaces the prior one; an empty list
+   * unbinds all creatives from the package. */
+  setPackageCreativeAssignments(
+    orderId: string,
+    packageId: string,
+    assignments: ReadonlyArray<{ creative_id: string }>,
+  ): void {
+    const o = orders.get(orderId);
+    if (!o) return;
+    o.package_creative_assignments = o.package_creative_assignments ?? {};
+    o.package_creative_assignments[packageId] = [...assignments];
+  },
+
+  getPackageCreativeAssignments(
+    orderId: string,
+    packageId: string,
+  ): ReadonlyArray<{ creative_id: string }> {
+    const o = orders.get(orderId);
+    return o?.package_creative_assignments?.[packageId] ?? [];
   },
 
   getDelivery(orderId: string): MockDeliveryRow | null {
@@ -449,10 +488,10 @@ export const mockUpstream = {
   // override map — the controller raises TestControllerError('NOT_FOUND').
   _creativeStatusOverrides: new Map<
     string,
-    { status: string; rejection_reason?: string }
+    { status: string; rejection_reason?: string; observed_at?: string }
   >(),
 
-  getCreativeStatus(creativeId: string): { status: string; rejection_reason?: string } | undefined {
+  getCreativeStatus(creativeId: string): { status: string; rejection_reason?: string; observed_at?: string } | undefined {
     const override = this._creativeStatusOverrides.get(creativeId);
     if (override) return override;
     // Fallback to seeded creatives so a creative seeded via comply seed.creative
@@ -469,13 +508,67 @@ export const mockUpstream = {
     creativeId: string,
     status: string,
     rejectionReason?: string,
-  ): { status: string; rejection_reason?: string } | undefined {
+  ): { status: string; rejection_reason?: string; observed_at?: string } | undefined {
     const previous = this.getCreativeStatus(creativeId);
     this._creativeStatusOverrides.set(creativeId, {
       status,
+      observed_at: new Date().toISOString(),
       ...(rejectionReason !== undefined && { rejection_reason: rejectionReason }),
     });
     return previous;
+  },
+
+  /** 3.1 dependency_impairment — compute impairment[] entries for an
+   * order. Walks the order's per-package creative_assignments, looks up
+   * each creative's status, and emits an entry for every creative whose
+   * status indicates the dependency is offline (`rejected` for now;
+   * `archived` etc. follow the same rule when the spec expands).
+   * Same-resource entries are merged so the same creative rejected on
+   * multiple packages yields a single impairment carrying both package_ids. */
+  computeImpairmentsForOrder(orderId: string): ReadonlyArray<{
+    impairment_id: string;
+    resource_type: 'creative';
+    resource_id: string;
+    package_ids: string[];
+    transition: { to: string };
+    reason_code: string;
+    observed_at: string;
+  }> {
+    const o = orders.get(orderId);
+    if (!o) return [];
+    const offlineStatuses = new Set(['rejected']);
+    const byCreative = new Map<string, {
+      packageIds: Set<string>;
+      status: string;
+      reason?: string;
+      observedAt: string;
+    }>();
+    for (const [packageId, assignments] of Object.entries(o.package_creative_assignments ?? {})) {
+      for (const a of assignments) {
+        const s = this.getCreativeStatus(a.creative_id);
+        if (!s || !offlineStatuses.has(s.status)) continue;
+        const prior = byCreative.get(a.creative_id);
+        if (prior) {
+          prior.packageIds.add(packageId);
+        } else {
+          byCreative.set(a.creative_id, {
+            packageIds: new Set([packageId]),
+            status: s.status,
+            ...(s.rejection_reason !== undefined && { reason: s.rejection_reason }),
+            observedAt: s.observed_at ?? new Date().toISOString(),
+          });
+        }
+      }
+    }
+    return [...byCreative.entries()].map(([creativeId, entry], idx) => ({
+      impairment_id: `imp_${orderId}_${idx}_${creativeId}`,
+      resource_type: 'creative' as const,
+      resource_id: creativeId,
+      package_ids: [...entry.packageIds],
+      transition: { to: entry.status },
+      reason_code: entry.reason ?? 'CREATIVE_REJECTED',
+      observed_at: entry.observedAt,
+    }));
   },
 
   hasCreative(creativeId: string): boolean {
@@ -526,6 +619,7 @@ export const mockUpstream = {
     seededFormats.clear();
     proposalsMap.clear();
     createMediaBuyDirectives.clear();
+    unavailableUpstreams.clear();
     this._accountStatusOverrides.clear();
     this._creativeStatusOverrides.clear();
   },
