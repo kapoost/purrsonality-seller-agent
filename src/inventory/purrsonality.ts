@@ -430,6 +430,21 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     if (rTop.start_time && rTop.end_time && isIsoTime(rTop.start_time) && isIsoTime(rTop.end_time) && rTop.start_time > rTop.end_time) {
       throw new AdcpError('VALIDATION_ERROR', { message: 'start_time must be before end_time', field: '/end_time' });
     }
+    // Reject past-start flights. AAO 3.1-rc schema_validation/past_start_rejection
+    // expects INVALID_REQUEST when start_time is in the past. We allow a small
+    // grace window (clock skew across SDK/buyer/seller) so legitimately
+    // immediate flights aren't rejected — comply runner emits start_time years
+    // in the past so even 1-hour grace catches the test.
+    const PAST_GRACE_MS = 60 * 60 * 1000; // 1h
+    if (rTop.start_time && isIsoTime(rTop.start_time)) {
+      const startTs = Date.parse(rTop.start_time);
+      if (Number.isFinite(startTs) && startTs < Date.now() - PAST_GRACE_MS) {
+        throw new AdcpError('INVALID_REQUEST', {
+          message: `start_time ${rTop.start_time} is in the past`,
+          field: '/start_time',
+        });
+      }
+    }
     const flight = rTop.flight;
     if (flight?.start_time && flight?.end_time && isIsoTime(flight.start_time) && isIsoTime(flight.end_time) && flight.start_time > flight.end_time) {
       throw new AdcpError('VALIDATION_ERROR', { message: 'flight.start_time must be before flight.end_time', field: '/flight/end_time' });

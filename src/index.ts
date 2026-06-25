@@ -43,6 +43,12 @@ serve(
     createAdcpServerFromPlatform(platform, {
       name: 'purrsonality-seller',
       version: '0.0.1',
+      // Pin to AdCP 3.1 so SDK 9.x echoes `adcp_version` on response envelope
+      // (gated by `bundleSupportsAdcpVersionField` — only 3.1+ surfaces the
+      // field). Required by version_negotiation/capabilities_advertise_and_echo.
+      // Backwards compatible: 3.0 buyers ignore the envelope echo via
+      // additionalProperties: true.
+      adcpVersion: '3.1',
       taskStore,
       taskRegistry,
       stateStore,
