@@ -190,14 +190,20 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         pricing_currencies?: readonly string[];
       };
     };
-    // In sandbox mode with seeded products, hide the default live catalog
-    // (purr_result_card_v1) so storyboard runners see exactly what they
-    // seeded — required by 3.1 storyboards that assert
-    // `products[0].product_id` / `field_absent: products[1]` against a
-    // fixture (pricing_currency_filter, canonical_formats). Live mode or
-    // sandbox without seeds keeps the default catalog visible.
+    // 3.1 pricing_currency_filter is the only storyboard that asserts
+    // `products[0].product_id` + `field_absent: products[1]` against a
+    // seeded fixture — and seededProducts is GLOBAL state across the
+    // whole eval session, so unconditionally hiding the hardcoded catalog
+    // whenever any seed exists broke brief-discovery storyboards that
+    // run after a seeding scenario (dependency_impairment,
+    // creative_fate_after_cancellation, invalid_transitions, …). Gate
+    // the hide on `filters.pricing_currencies` being set — the explicit
+    // signal that the buyer wants the seeded multi-currency surface.
     const isSandbox = (ctx.account as { mode?: string } | undefined)?.mode === 'sandbox';
-    const seededOnly = isSandbox && mockUpstream.hasSeededProducts();
+    const seededOnly = isSandbox
+      && mockUpstream.hasSeededProducts()
+      && Array.isArray(r.filters?.pricing_currencies)
+      && r.filters.pricing_currencies.length > 0;
     // Seeded products are hoisted to `products[0]` ONLY when the brief
     // names them — `product_id` with underscores rewritten as spaces is
     // matched (case-insensitive) as a substring of the brief. This lets the
