@@ -43,6 +43,12 @@ serve(
     createAdcpServerFromPlatform(platform, {
       name: 'purrsonality-seller',
       version: '0.0.1',
+      // Temporary: surface error cause chains in production so the
+      // AAO comply runner sees the actual reason chain instead of
+      // "Tool X encountered an internal error". Revert once we've
+      // diagnosed the create_media_buy_async/submitted_arm_response
+      // SERVICE_UNAVAILABLE root cause.
+      exposeErrorDetails: true,
       // adcpVersion NOT pinned: SDK 9.x default lets per-request resolution
       // pick the best release per buyer's `adcp_version` pin. Earlier attempt
       // to pin '3.1' (commit 3c0ab5d) regressed deterministic_creative on the
