@@ -1329,11 +1329,22 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         const title = (a['title'] as { content?: string } | undefined)?.content ?? '';
         const mainImage = a['main_image'] as { width?: number; height?: number } | undefined;
         const cta = (a['cta'] as { content?: string } | undefined)?.content;
-        const pixelTracker = a['pixel_tracker'] as { event?: string; custom_event_name?: string } | undefined;
-        // Constraint map per storyboard narrative
+        // Pixel trackers can be carried under arbitrary asset slot keys
+        // (impression_tracker, viewability_tracker, click_tracker, custom_tracker
+        // — per the storyboard's full-bundle example). Identify them by
+        // asset_type='pixel_tracker' rather than slot name.
+        const pixelTrackers = Object.values(a).filter(
+          (v): v is { asset_type: 'pixel_tracker'; event?: string; custom_event_name?: string } =>
+            typeof v === 'object' && v !== null
+            && (v as { asset_type?: string }).asset_type === 'pixel_tracker',
+        );
+        // Constraint map per storyboard narrative (closed enum is
+        // UPPERCASE_UNDERSCORE per the runner's valid example "LEARN_MORE";
+        // the invalid sample is "EXPLORE_MORE" — same shape, just not in
+        // the enum.)
         const TITLE_MAX_CHARS = 80;
         const ALLOWED_IMAGE_SIZES: ReadonlyArray<[number, number]> = [[1200, 627], [1080, 1080]];
-        const ALLOWED_CTAS = new Set(['Learn More', 'Shop Now', 'Sign Up', 'Get Started']);
+        const ALLOWED_CTAS = new Set(['LEARN_MORE', 'SHOP_NOW', 'SIGN_UP', 'GET_STARTED', 'BOOK_NOW', 'DOWNLOAD']);
         let nativeError: { code: string; message: string; field?: string; details?: unknown } | null = null;
         if (title.length > TITLE_MAX_CHARS) {
           nativeError = {
@@ -1355,12 +1366,17 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
             field: '/assets/cta/content',
             details: { allowed_values: [...ALLOWED_CTAS] },
           };
-        } else if (pixelTracker && pixelTracker.event === 'custom' && !pixelTracker.custom_event_name) {
-          nativeError = {
-            code: 'VALIDATION_ERROR',
-            message: 'pixel_tracker event=custom requires custom_event_name',
-            field: '/assets/pixel_tracker/custom_event_name',
-          };
+        } else {
+          const badTracker = pixelTrackers.find(
+            (pt) => pt.event === 'custom' && !pt.custom_event_name,
+          );
+          if (badTracker) {
+            nativeError = {
+              code: 'VALIDATION_ERROR',
+              message: 'pixel_tracker event=custom requires custom_event_name',
+              field: '/assets/pixel_tracker/custom_event_name',
+            };
+          }
         }
         if (nativeError) {
           // Storyboard's `expect_error: true` + `check: error_code` expects
