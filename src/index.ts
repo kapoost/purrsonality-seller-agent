@@ -51,7 +51,7 @@ serve(
       // the actual served release and may sidestep the 3.0-vs-3.1 envelope
       // split while satisfying version_negotiation's envelope_field_present
       // adcp_version check. If 3.0 grader regresses, revert.
-      adcpVersion: '3.1-rc',
+      adcpVersion: '3.1',
       taskStore,
       taskRegistry,
       stateStore,
