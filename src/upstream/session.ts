@@ -43,11 +43,18 @@ export function withSession<T>(sessionKey: string, fn: () => T): T {
  * Falls back to DEFAULT_SESSION_KEY when the input is missing or doesn't
  * match the `<id>--<step>` pattern.
  */
-export function extractSessionKey(req: unknown): string {
-  const ctx = (req as { context?: { correlation_id?: string } } | undefined)?.context;
-  const corr = ctx?.correlation_id;
-  if (typeof corr !== 'string' || corr.length === 0) return DEFAULT_SESSION_KEY;
-  const sepIdx = corr.indexOf('--');
-  if (sepIdx <= 0) return DEFAULT_SESSION_KEY;
-  return corr.slice(0, sepIdx);
+export function extractSessionKey(_req: unknown): string {
+  // First-pass implementation regressed dependency_impairment (isolated Media
+  // Buy 74→68) and delivery_reporting (Reporting 12→8) more than it gained
+  // on Creative (32→33 via list_and_filter unblock). Isolation broke
+  // cross-handler state assumptions that some storyboards rely on (e.g.
+  // delivery_reporting/setup needs state seeded across helper calls that
+  // don't all carry context.correlation_id; comply controller force-status
+  // path likely doesn't see the same correlation_id as the sync_creatives
+  // write that established the creative). Neutralised: all calls land on
+  // DEFAULT_SESSION_KEY, so behaviour matches pre-refactor while keeping the
+  // wiring in place for a more surgical re-enablement (e.g. per-handler
+  // opt-in, or routing only `listCreatives` through the scoped key while
+  // `force.creative_status` / `sync_creatives` keep default).
+  return DEFAULT_SESSION_KEY;
 }
