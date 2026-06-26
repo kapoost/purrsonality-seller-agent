@@ -14,13 +14,24 @@ import { platform } from './platform.ts';
 // signedRequests verifier was removed when we dropped the
 // signed-requests specialism declaration; the keys + capability
 // signalling stay so opt-in signing buyers can still discover us.
-import { idempotencyStore, mediaBuyStore, stateStore, taskRegistry } from './stores/index.ts';
+import { idempotencyStore, mediaBuyStore, stateStore, taskRegistry, wipePersistentTestState } from './stores/index.ts';
 import { buildAdcpCapabilities, buildOAuthProtectedResource } from './well-known/adcp-capabilities.ts';
 import { buildAgentCard } from './well-known/agent-card.ts';
 import { startWellKnownProxy } from './well-known/proxy.ts';
 
 const env = loadEnv();
 await runMigrations();
+// Drain accumulated comply-eval state from prior runs (creative status
+// overrides surviving in `creatives`, deterministic task ids in
+// `adcp_decisioning_tasks`, lingering `impressions`/`metrics_events`). Each
+// fly deploy starts on a clean slate; the AAO comply runner's
+// dependency_impairment chain is exquisitely sensitive to leftover creative
+// status from prior storyboards, and the persistent stores otherwise survive
+// process restarts. This is a no-op in in-memory mode (DATABASE_URL unset).
+const wipe = await wipePersistentTestState();
+if (wipe.tables_cleared.length > 0) {
+  console.log('[startup] wiped persistent comply tables:', wipe.tables_cleared.join(', '));
+}
 startMetricsFlusher();
 startHeartbeat();
 startAdminServer({

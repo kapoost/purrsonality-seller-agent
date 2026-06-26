@@ -47,3 +47,24 @@ export async function dropTaskRecord(taskId: string): Promise<void> {
   if (!usingPostgres) return; // in-memory: storyboard runs are isolated per process
   await pool!.query('DELETE FROM adcp_decisioning_tasks WHERE task_id = $1', [taskId]);
 }
+
+/** Wipe every persistent table backing comply scenarios — used by the
+ * `comply_test_controller(scenario=reset_test_state)` extension to drain
+ * accumulated state from prior AAO eval runs (creative status overrides
+ * surviving in `creatives`, deterministic task ids in
+ * `adcp_decisioning_tasks`, lingering `impressions`). The wipe is idempotent
+ * and Postgres-only; in-memory mode is naturally fresh per process. */
+export async function wipePersistentTestState(): Promise<{
+  tables_cleared: string[];
+}> {
+  if (!usingPostgres) return { tables_cleared: [] };
+  const tables = ['adcp_decisioning_tasks', 'creatives', 'impressions', 'metrics_events'];
+  for (const t of tables) {
+    try {
+      await pool!.query(`TRUNCATE TABLE ${t} RESTART IDENTITY CASCADE`);
+    } catch {
+      // Table may not exist (older schema versions) — best-effort.
+    }
+  }
+  return { tables_cleared: tables };
+}
