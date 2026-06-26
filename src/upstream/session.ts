@@ -29,14 +29,8 @@ export function getCurrentSessionKey(): string {
   return storage.getStore()?.sessionKey ?? DEFAULT_SESSION_KEY;
 }
 
-export function withSession<T>(_sessionKey: string, fn: () => T): T {
-  // ALS bypass — Bun's AsyncLocalStorage propagation across handler
-  // boundaries was suspected of triggering regressions on the first-pass
-  // session refactor (isolated Media Buy 74→68). Until that's nailed down,
-  // `withSession` is a no-op wrapper. All `mockUpstream` calls resolve to
-  // `getCurrentSessionKey() === DEFAULT_SESSION_KEY` regardless of the
-  // passed key, so behaviour matches the pre-refactor single-Map state.
-  return fn();
+export function withSession<T>(sessionKey: string, fn: () => T): T {
+  return storage.run({ sessionKey }, fn);
 }
 
 /**
