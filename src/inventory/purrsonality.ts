@@ -239,16 +239,19 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     if (wantedDeliveryType) {
       raw = raw.filter((p) => (p.delivery_type ?? 'non_guaranteed') === wantedDeliveryType);
     }
-    // 3.1 measurement_accountability capability filter — hardcoded catalog
-    // exposes only impressions/spend/clicks by default; seeded fixtures
-    // may carry extended available_metrics (completed_views, etc.). Skip
-    // products that don't declare every requested metric.
+    // 3.1 measurement_accountability capability filter — display catalog
+    // exposes only impressions/spend/clicks; ctv/video products report the
+    // wider completion-lifecycle set (mirrors the emission widening in
+    // buildProduct's reporting_capabilities below). Skip products that
+    // don't declare every requested metric.
     const wantedMetrics = r.filters?.required_metrics;
     if (wantedMetrics && wantedMetrics.length > 0) {
-      const DEFAULT_METRICS: ReadonlyArray<string> = ['impressions', 'spend', 'clicks'];
+      const DISPLAY_METRICS: ReadonlyArray<string> = ['impressions', 'spend', 'clicks'];
+      const VIDEO_METRICS: ReadonlyArray<string> = ['impressions', 'spend', 'clicks', 'views', 'completed_views', 'completion_rate'];
       raw = raw.filter((p) => {
-        const have: ReadonlyArray<string> = (p as { available_metrics?: ReadonlyArray<string> }).available_metrics
-          ?? DEFAULT_METRICS;
+        const explicit = (p as { available_metrics?: ReadonlyArray<string> }).available_metrics;
+        const have: ReadonlyArray<string> = explicit
+          ?? ((p.channel === 'ctv' || (p.channel as string) === 'video') ? VIDEO_METRICS : DISPLAY_METRICS);
         return wantedMetrics.every((m) => have.includes(m));
       });
     }
