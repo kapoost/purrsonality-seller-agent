@@ -579,6 +579,13 @@ export const mockUpstream = {
     { status: string; rejection_reason?: string; observed_at?: string }
   >(),
 
+  /** Explicit override only (no seeded fallback). Used by list_creatives overlay
+   * so that a creative which was synced but never forced reports its
+   * library-default status, not the seeded-fallback 'processing'. */
+  getCreativeStatusOverride(creativeId: string): { status: string; rejection_reason?: string; observed_at?: string } | undefined {
+    return this._creativeStatusOverrides.get(creativeId);
+  },
+
   getCreativeStatus(creativeId: string): { status: string; rejection_reason?: string; observed_at?: string } | undefined {
     const override = this._creativeStatusOverrides.get(creativeId);
     if (override) return override;

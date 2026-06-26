@@ -1908,10 +1908,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         // 3.1 dependency_impairment: post-#5675 storyboard re-reads
         // creative via list_creatives between force_creative_status and
         // get_buy_impaired so impairment.coherence ledger observes the
-        // forced status on the wire. Nakładaj _creativeStatusOverrides
-        // tak żeby list_creatives reflektowało forced rejected status,
-        // a nie stale seed fixture (approved).
-        const override = mockUpstream.getCreativeStatus(creativeId);
+        // forced status on the wire. Nakładaj WYŁĄCZNIE explicit
+        // _creativeStatusOverrides (nie seed fallback) — creative który
+        // był synced ale nigdy forced ma raportować seed fixture status
+        // (approved/pending_review), nie fallback 'processing' z
+        // getCreativeStatus.
+        const override = mockUpstream.getCreativeStatusOverride(creativeId);
         return {
           creative_id: creativeId,
           name: (cAny['name'] as string) ?? creativeId ?? 'seeded creative',
