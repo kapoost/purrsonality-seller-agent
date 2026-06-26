@@ -89,6 +89,7 @@ const deliverySim = new Map<
 >();
 const seededProducts = new Map<string, PurrProductConfig>();
 const seededCreatives = new Map<string, Record<string, unknown>>();
+let creativeSeq = 0;
 const seededFormats = new Map<string, Record<string, unknown>>();
 const proposalsMap = new Map<string, { issued_at: string; expires_at: string }>();
 
@@ -289,7 +290,17 @@ export const mockUpstream = {
   },
 
   seedCreative(id: string, fixture: Record<string, unknown>, accountId?: string): void {
-    seededCreatives.set(id, { ...fixture, creative_id: id, _account_id: accountId });
+    // Stamp a monotonically increasing _seq so listCreatives can sort by
+    // insertion recency without relying on Map iteration order or a single
+    // shared `nowIso`. 3.1 creative_lifecycle/list_and_filter expects
+    // creatives[0] to be the most-recently-synced creative — ties or
+    // wrong-direction sorts trip the field_equals_context check.
+    seededCreatives.set(id, {
+      ...fixture,
+      creative_id: id,
+      _account_id: accountId,
+      _seq: ++creativeSeq,
+    });
   },
 
   listCreatives(accountId?: string): Array<Record<string, unknown>> {

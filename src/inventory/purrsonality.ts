@@ -1868,6 +1868,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           typeof formatRef === 'object' && formatRef !== null
             ? { agent_url: formatRef.agent_url ?? FORMAT_AGENT_URL, id: formatRef.id ?? 'display_300x250' }
             : { agent_url: FORMAT_AGENT_URL, id: typeof formatRef === 'string' ? formatRef : 'display_300x250' };
+        const seq = cAny['_seq'];
         return {
           creative_id: (cAny['creative_id'] as string) ?? `seeded_${Date.now()}`,
           name: (cAny['name'] as string) ?? (cAny['creative_id'] as string) ?? 'seeded creative',
@@ -1876,7 +1877,8 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           status: (cAny['status'] as string) ?? 'approved',
           created_date: (cAny['created_date'] as string) ?? nowIso,
           updated_date: (cAny['updated_date'] as string) ?? nowIso,
-        };
+          ...(typeof seq === 'number' && { _seq: seq }),
+        } as ListRow;
       })
       .filter((row) => !seenIds.has(row.creative_id));
     let normalized: ListRow[] = [...fromPersistent, ...fromMock];
@@ -1922,10 +1924,20 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     }
     // 3.1 creative_lifecycle/list_and_filter expects creatives[0] to be
     // the most recently synced creative ($context.synced_creative_id).
-    // Persistent rows precede mock rows in the merge above; sort by
-    // updated_date desc so the latest sync wins position 0 regardless of
-    // source.
-    normalized.sort((a, b) => (b.updated_date > a.updated_date ? 1 : b.updated_date < a.updated_date ? -1 : 0));
+    // Sort by mockUpstream.seedCreative's monotonic `_seq` when present
+    // (handles ties when many creatives are synced in the same listCreatives
+    // call — `nowIso` ties them all otherwise). Fall back to updated_date
+    // for persistent rows that don't carry _seq.
+    const seqOf = (row: ListRow): number => {
+      const raw = (row as unknown as Record<string, unknown>)['_seq'];
+      return typeof raw === 'number' ? raw : 0;
+    };
+    normalized.sort((a, b) => {
+      const sa = seqOf(a);
+      const sb = seqOf(b);
+      if (sa !== sb) return sb - sa;
+      return b.updated_date > a.updated_date ? 1 : b.updated_date < a.updated_date ? -1 : 0;
+    });
 
     const pageSize = Math.max(1, Math.min(100, r.pagination?.max_results ?? 100));
     const offset = Number.parseInt(r.pagination?.cursor ?? '0', 10) || 0;
