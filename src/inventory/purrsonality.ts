@@ -1904,14 +1904,22 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
             ? { agent_url: formatRef.agent_url ?? FORMAT_AGENT_URL, id: formatRef.id ?? 'display_300x250' }
             : { agent_url: FORMAT_AGENT_URL, id: typeof formatRef === 'string' ? formatRef : 'display_300x250' };
         const seq = cAny['_seq'];
+        const creativeId = (cAny['creative_id'] as string) ?? `seeded_${Date.now()}`;
+        // 3.1 dependency_impairment: post-#5675 storyboard re-reads
+        // creative via list_creatives between force_creative_status and
+        // get_buy_impaired so impairment.coherence ledger observes the
+        // forced status on the wire. Nakładaj _creativeStatusOverrides
+        // tak żeby list_creatives reflektowało forced rejected status,
+        // a nie stale seed fixture (approved).
+        const override = mockUpstream.getCreativeStatus(creativeId);
         return {
-          creative_id: (cAny['creative_id'] as string) ?? `seeded_${Date.now()}`,
-          name: (cAny['name'] as string) ?? (cAny['creative_id'] as string) ?? 'seeded creative',
+          creative_id: creativeId,
+          name: (cAny['name'] as string) ?? creativeId ?? 'seeded creative',
           format_id: formatId,
           assets: (cAny['assets'] as Record<string, unknown>) ?? {},
-          status: (cAny['status'] as string) ?? 'approved',
+          status: override?.status ?? (cAny['status'] as string) ?? 'approved',
           created_date: (cAny['created_date'] as string) ?? nowIso,
-          updated_date: (cAny['updated_date'] as string) ?? nowIso,
+          updated_date: override?.observed_at ?? (cAny['updated_date'] as string) ?? nowIso,
           ...(typeof seq === 'number' && { _seq: seq }),
         } as ListRow;
       });
