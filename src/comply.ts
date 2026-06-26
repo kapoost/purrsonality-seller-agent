@@ -1,7 +1,6 @@
 import type { ComplyControllerConfig } from '@adcp/sdk/testing';
 import { TestControllerError } from '@adcp/sdk/server';
 import { mockUpstream } from './upstream/mock.ts';
-import { withSession, extractSessionKey } from './upstream/session.ts';
 import { PUBLISHER } from './config/purrsonality.ts';
 import { dropTaskRecord } from './stores/index.ts';
 
@@ -32,8 +31,7 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
   },
 
   seed: {
-    product: async (params, ctx) => {
-      return withSession(extractSessionKey((ctx as { input?: unknown })?.input ?? params), async () => {
+    product: async (params) => {
       const fixture = (params.fixture ?? {}) as {
         name?: string;
         description?: string;
@@ -151,10 +149,8 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
           vendor_metrics: fixture.reporting_capabilities.vendor_metrics,
         }),
       });
-          });
     },
-    pricing_option: async (params, ctx) => {
-      return withSession(extractSessionKey((ctx as { input?: unknown })?.input ?? params), async () => {
+    pricing_option: async (params) => {
       const fixture = params.fixture as {
         fixed_price?: number;
         floor_price?: number;
@@ -197,20 +193,14 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         ...(fixture.fixed_price !== undefined && { fixed_price: fixture.fixed_price }),
         ...(fixture.floor_price !== undefined && { floor_price: fixture.floor_price }),
       });
-          });
     },
-    creative: async (params, ctx) => {
-      return withSession(extractSessionKey((ctx as { input?: unknown })?.input ?? params), async () => {
+    creative: async (params) => {
       mockUpstream.seedCreative(params.creative_id, params.fixture);
-          });
     },
-    creative_format: async (params, ctx) => {
-      return withSession(extractSessionKey((ctx as { input?: unknown })?.input ?? params), async () => {
+    creative_format: async (params) => {
       mockUpstream.seedCreativeFormat(params.format_id, params.fixture);
-          });
     },
-    media_buy: async (params, ctx) => {
-      return withSession(extractSessionKey((ctx as { input?: unknown })?.input ?? params), async () => {
+    media_buy: async (params) => {
       const fixture = params.fixture as {
         status?: string;
         budget?: number;
@@ -251,13 +241,11 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         ...(fixture.status && { status: mockStatus(fixture.status) }),
         ...(legacyPackages.length > 0 && { legacy_packages: legacyPackages }),
       });
-          });
     },
   },
 
   force: {
-    upstream_unavailable: async (params, ctx) => {
-      return withSession(extractSessionKey((ctx as { input?: unknown })?.input ?? params), async () => {
+    upstream_unavailable: async (params) => {
       // 3.1 stale_response_advisory storyboard — mark the named upstream
       // unreachable for subsequent `tool` calls. The follow-up get_products
       // call detects this state and rides STALE_RESPONSE in errors[] on a
@@ -270,10 +258,8 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         previous_state: wasUnavailable ? 'unavailable' : 'available',
         current_state: 'unavailable',
       };
-          });
     },
-    create_media_buy_arm: async (params, ctx) => {
-      return withSession(extractSessionKey((ctx as { input?: unknown })?.input ?? params), async () => {
+    create_media_buy_arm: async (params) => {
       const accountId = `sandbox_${PUBLISHER.network_code}`;
       // The storyboard's `field_value` assertion on `task_id` demands the
       // exact directive value (e.g. `task_async_signed_io_q2`) be echoed
@@ -294,10 +280,8 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
           ...(params.task_id !== undefined && { task_id: params.task_id }),
         },
       };
-          });
     },
-    media_buy_status: async (params, ctx) => {
-      return withSession(extractSessionKey((ctx as { input?: unknown })?.input ?? params), async () => {
+    media_buy_status: async (params) => {
       // AdCP 3.1 deterministic_testing — terminal states (completed, canceled,
       // rejected) reject downstream transitions with INVALID_TRANSITION.
       // The runner exercises this by force_completed first, then asks the
@@ -330,7 +314,6 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         previous_state: previous === 'completed' ? 'completed' : previous === 'paused' ? 'paused' : 'active',
         current_state: params.status,
       };
-          });
     },
 
     // AdCP 3.1 deterministic_testing — deterministic_account storyboard drives
@@ -340,15 +323,13 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
     // step with whatever account_id the runner generated, so we accept any id:
     // first-touch becomes the seed, subsequent calls track previous → current
     // honestly. SDK already validates the AccountStatus enum at the dispatcher.
-    account_status: async (params, ctx) => {
-      return withSession(extractSessionKey((ctx as { input?: unknown })?.input ?? params), async () => {
+    account_status: async (params) => {
       const previous = mockUpstream.setAccountStatus(params.account_id, params.status);
       return {
         success: true,
         previous_state: previous,
         current_state: params.status,
       };
-          });
     },
 
     // AdCP 3.1 deterministic_testing — deterministic_creative storyboard drives
@@ -356,8 +337,7 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
     // The controller_validation/not_found_entity probe deliberately calls this
     // with a nonexistent creative_id — we surface NOT_FOUND so the SDK wraps
     // it as the spec-required ControllerError.
-    creative_status: async (params, ctx) => {
-      return withSession(extractSessionKey((ctx as { input?: unknown })?.input ?? params), async () => {
+    creative_status: async (params) => {
       if (!mockUpstream.hasCreative(params.creative_id)) {
         throw new TestControllerError(
           'NOT_FOUND',
@@ -390,7 +370,6 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         previous_state: (previous?.status as never) ?? ('processing' as never),
         current_state: params.status,
       };
-          });
     },
   },
 
@@ -399,8 +378,7 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
   // required:false) verify after-the-fact that the seller recorded the
   // observation. We always return one canonical entry — no real audit log
   // is wired in this seller; the controller surface is enough for compliance.
-  queryProvenanceAuditObservations: async (params, ctx) => {
-    return withSession(extractSessionKey((ctx as { input?: unknown })?.input ?? params), async () => {
+  queryProvenanceAuditObservations: async (params) => {
     // Storyboards exercise two carve-out flavours by encoding the oversight
     // mode in the creative_id (`_directed_` vs `_edited_`). The reply mirrors
     // whichever the buyer asked for so the audit reflects the real submission.
@@ -426,12 +404,10 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         },
       ],
     };
-      });
   },
 
   simulate: {
-    delivery: async (params, ctx) => {
-      return withSession(extractSessionKey((ctx as { input?: unknown })?.input ?? params), async () => {
+    delivery: async (params) => {
       mockUpstream.addDelivery(params.media_buy_id, {
         ...(params.impressions !== undefined && { impressions: params.impressions }),
         ...(params.clicks !== undefined && { clicks: params.clicks }),
@@ -447,10 +423,8 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
           reported_spend: params.reported_spend,
         },
       };
-          });
     },
-    budget_spend: async (params, ctx) => {
-      return withSession(extractSessionKey((ctx as { input?: unknown })?.input ?? params), async () => {
+    budget_spend: async (params) => {
       // AdCP 3.1 deterministic_testing — push the buy to N% of its budget so
       // downstream pacing / depletion assertions see a deterministic delivery
       // row. We push spend (and a proportional impression count at the order's
@@ -474,7 +448,6 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
           spend: targetSpend,
         },
       } as unknown as Awaited<ReturnType<NonNullable<NonNullable<ComplyControllerConfig['simulate']>['budget_spend']>>>;
-          });
     },
   },
 };
