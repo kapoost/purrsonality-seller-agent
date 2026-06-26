@@ -43,15 +43,15 @@ serve(
     createAdcpServerFromPlatform(platform, {
       name: 'purrsonality-seller',
       version: '0.0.1',
-      // adcpVersion NOT pinned: SDK 9.x default lets per-request resolution
-      // pick the best release per buyer's `adcp_version` pin. Earlier attempt
-      // to pin '3.1' (commit 3c0ab5d) regressed deterministic_creative on the
-      // 3.0 grader because pinning forces SDK to emit 3.1 envelope conventions
-      // (status / media_buy_status split, envelope-level adcp_version echo)
-      // even when the 3.0 grader is the caller, breaking 3.0 schema validation
-      // of mutating responses. version_negotiation/capabilities_advertise_and_echo
-      // is advisory at 3.1 (not blocking) so the pin gained nothing while
-      // losing 3.0 badge stability.
+      // adcpVersion: '3.1-rc' — second pin attempt after Phase J commits made
+      // 3.1-rc the active diagnostic target. Earlier attempt to pin '3.1'
+      // (commit 3c0ab5d → revert ad410dd) regressed deterministic_creative on
+      // the 3.0 grader because pinning forces SDK to emit 3.1 envelope
+      // conventions even when 3.0 grader is the caller. Pin '3.1-rc' matches
+      // the actual served release and may sidestep the 3.0-vs-3.1 envelope
+      // split while satisfying version_negotiation's envelope_field_present
+      // adcp_version check. If 3.0 grader regresses, revert.
+      adcpVersion: '3.1-rc',
       taskStore,
       taskRegistry,
       stateStore,
