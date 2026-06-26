@@ -1419,6 +1419,11 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     const r = (req ?? {}) as {
       pagination?: { max_results?: number; cursor?: string };
       format_ids?: ReadonlyArray<{ agent_url?: string; id: string } | string>;
+      // 3.1 pagination_integrity_creative_formats — buyer narrows by
+      // substring match on format.name to a knowable seeded set before
+      // walking pages. Case-insensitive substring is sufficient for the
+      // storyboard's "Pagination Integrity Format" prefix.
+      name_search?: string;
     };
     const displaySlots = [
       FormatAsset.image({ asset_id: 'image', required: true }),
@@ -1468,6 +1473,10 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         r.format_ids!.map((f) => (typeof f === 'string' ? f : f.id)),
       );
       allFormats = allFormats.filter((f) => wantedIds.has(f.format_id.id));
+    }
+    if (typeof r.name_search === 'string' && r.name_search.length > 0) {
+      const needle = r.name_search.toLowerCase();
+      allFormats = allFormats.filter((f) => f.name.toLowerCase().includes(needle));
     }
     const pageSize = Math.max(1, Math.min(100, r.pagination?.max_results ?? 100));
     const offset = Number.parseInt(r.pagination?.cursor ?? '0', 10) || 0;
