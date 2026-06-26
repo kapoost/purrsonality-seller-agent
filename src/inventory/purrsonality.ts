@@ -1852,13 +1852,16 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       updated_date: row.reviewed_at ?? row.submitted_at,
     }));
 
-    // Merge persistent + mockUpstream creatives (persistent wins on conflict).
-    // Prior impl skipped mockUpstream entirely when persistent had any rows —
-    // that broke creative_lifecycle/list_and_filter and creative_fate_*
-    // storyboards which seed creatives via mockUpstream.seedCreative but also
-    // accumulate persistent rows across test runs.
-    const seenIds = new Set(fromPersistent.map((r) => r.creative_id));
+    // Merge persistent + mockUpstream creatives — MOCK wins on conflict.
+    // When a creative_id is in BOTH stores (most common case: re-sync of a
+    // creative whose persistent row survived a prior eval), the mock row
+    // carries the up-to-date `_seq` from the most recent seedCreative call.
+    // The persistent row's `submitted_at` is the historic submission time;
+    // letting it win would bury just-re-synced creatives behind older state
+    // and break creative_lifecycle/list_and_filter's `creatives[0] ==
+    // synced_creative_id` check.
     const raw = mockUpstream.listCreatives(ctx.account?.id);
+    const mockIds = new Set(raw.map((c) => (c as { creative_id?: string }).creative_id ?? ''));
     const nowIso = new Date().toISOString();
     const fromMock: ListRow[] = raw
       .map((c) => {
@@ -1879,9 +1882,11 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           updated_date: (cAny['updated_date'] as string) ?? nowIso,
           ...(typeof seq === 'number' && { _seq: seq }),
         } as ListRow;
-      })
-      .filter((row) => !seenIds.has(row.creative_id));
-    let normalized: ListRow[] = [...fromPersistent, ...fromMock];
+      });
+    // Persistent rows that DON'T have a mock counterpart stay; mock-shadowed
+    // persistent rows drop out (mock copy carries the fresh _seq).
+    const fromPersistentSurviving = fromPersistent.filter((row) => !mockIds.has(row.creative_id));
+    let normalized: ListRow[] = [...fromPersistentSurviving, ...fromMock];
 
     // AdCP 3.1 filters — narrow before pagination.
     //   - creative_ids: explicit ID lookup (creative_fate_after_cancellation,
