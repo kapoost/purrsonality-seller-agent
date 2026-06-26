@@ -49,7 +49,7 @@ export interface PurrProductConfig {
   name: string;
   description: string;
   network_code: string;
-  channel: 'display';
+  channel: 'display' | 'video' | 'ctv' | 'audio';
   format_ids: readonly string[];
   /** 3.1 canonical_formats — fixture seeds format_ids as {agent_url, id}
    * objects pointing at https://creative.adcontextprotocol.org/. The

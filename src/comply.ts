@@ -69,6 +69,10 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         format_options?: ReadonlyArray<Record<string, unknown>>;
         publisher_properties?: ReadonlyArray<Record<string, unknown>>;
         delivery_type?: string;
+        // 3.1 measurement_accountability fixture — `channels: ["ctv"]`
+        // signals the product reports CTV completion metrics; our
+        // getProducts widens available_metrics for ctv/video channels.
+        channels?: ReadonlyArray<string>;
         reporting_capabilities?: { vendor_metrics?: ReadonlyArray<{ vendor: { domain: string }; metric_id: string }> };
       };
       // Accept comply fixture format_ids verbatim. Prior impl filtered
@@ -147,6 +151,9 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         }),
         ...(fixture.reporting_capabilities?.vendor_metrics !== undefined && {
           vendor_metrics: fixture.reporting_capabilities.vendor_metrics,
+        }),
+        ...(Array.isArray(fixture.channels) && fixture.channels.length > 0 && {
+          channel: fixture.channels[0] as 'display' | 'video' | 'ctv' | 'audio',
         }),
       });
     },

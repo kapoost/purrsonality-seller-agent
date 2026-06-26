@@ -334,7 +334,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           expected_delay_minutes: 60,
           timezone: 'UTC',
           supports_webhooks: false,
-          available_metrics: ['impressions', 'spend', 'clicks'],
+          // CTV / video products report completion lifecycle metrics in
+          // addition to the standard impression/click/spend triple. Detected
+          // via channel: matches measurement_accountability storyboard's
+          // `filters.required_metrics: ['completed_views']` for the seeded
+          // ctv_premium_completed_views fixture.
+          available_metrics: (p.channel === 'ctv' || (p.channel as string) === 'video')
+            ? ['impressions', 'spend', 'clicks', 'views', 'completed_views', 'completion_rate']
+            : ['impressions', 'spend', 'clicks'],
           date_range_support: 'date_range',
           vendor_metrics: [
             {

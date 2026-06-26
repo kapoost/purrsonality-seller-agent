@@ -164,7 +164,7 @@ export const mockUpstream = {
       name: overrides?.name ?? prior?.name ?? `Seeded ${id}`,
       description: overrides?.description ?? prior?.description ?? `Test product seeded by compliance runner: ${id}`,
       network_code: PUBLISHER.network_code,
-      channel: (overrides?.channel as 'display') ?? prior?.channel ?? 'display',
+      channel: (overrides?.channel as 'display' | 'video' | 'ctv' | 'audio') ?? prior?.channel ?? 'display',
       format_ids: (overrides?.format_ids as readonly string[]) ?? prior?.format_ids ?? existing.format_ids,
       ad_unit_ids: (overrides?.ad_unit_ids as readonly string[]) ?? prior?.ad_unit_ids ?? existing.ad_unit_ids,
       min_cpm: overrides?.min_cpm ?? prior?.min_cpm ?? existing.min_cpm,
