@@ -1213,6 +1213,8 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       return {
         media_buy_id: id,
         status: order ? mockToWireStatus(order.status) : 'active',
+        is_final: false,
+        pricing_model: 'cpm' as const,
         totals: {
           impressions,
           spend,
