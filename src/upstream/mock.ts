@@ -1,4 +1,5 @@
 import { PRODUCTS, PUBLISHER, type PurrProductConfig, type ProductAllowedAction } from '../config/purrsonality.ts';
+import { getCurrentSessionKey } from './session.ts';
 
 export interface MockOrder {
   order_id: string;
@@ -81,34 +82,71 @@ export interface MockDeliveryRow {
   pacing_pct: number;
 }
 
-const orders = new Map<string, MockOrder>();
-const requestKey = new Map<string, string>();
-const deliverySim = new Map<
-  string,
-  { impressions: number; clicks: number; spend: number; currency: string }
->();
-const seededProducts = new Map<string, PurrProductConfig>();
-const seededCreatives = new Map<string, Record<string, unknown>>();
-const seededFormats = new Map<string, Record<string, unknown>>();
-const proposalsMap = new Map<string, { issued_at: string; expires_at: string }>();
-
 export interface CreateMediaBuyDirective {
   arm: 'submitted' | 'input-required';
   task_id?: string;
   message?: string;
 }
 
-const createMediaBuyDirectives = new Map<string, CreateMediaBuyDirective>();
+// Per-storyboard state isolation. AAO comply runner runs many storyboards
+// in one eval session without resetting agent state between them; correlation_id
+// prefix (`<storyboard_id>--<step>`) is our session boundary. See
+// src/upstream/session.ts for the AsyncLocalStorage propagation; mockUpstream's
+// `s()` helper resolves the current storyboard's state slice. Calls without
+// a correlation_id fall back to the 'default' session — preserves legacy
+// behavior for adhoc probes and for storyboards that omit correlation_id.
+interface SessionState {
+  orders: Map<string, MockOrder>;
+  requestKey: Map<string, string>;
+  deliverySim: Map<string, { impressions: number; clicks: number; spend: number; currency: string }>;
+  seededProducts: Map<string, PurrProductConfig>;
+  seededCreatives: Map<string, Record<string, unknown>>;
+  seededFormats: Map<string, Record<string, unknown>>;
+  proposalsMap: Map<string, { issued_at: string; expires_at: string }>;
+  createMediaBuyDirectives: Map<string, CreateMediaBuyDirective>;
+  unavailableUpstreams: Map<string, { upstream_name?: string; since: number }>;
+  _accountStatusOverrides: Map<string, 'active' | 'pending_approval' | 'rejected' | 'payment_required' | 'suspended' | 'closed'>;
+  _creativeStatusOverrides: Map<string, { status: string; rejection_reason?: string; observed_at?: string }>;
+}
 
-// 3.1 stale_response_advisory — when comply_test_controller's
-// force_upstream_unavailable scenario fires, we mark the named upstream
-// unreachable for subsequent calls. Each entry stores the tool the
-// directive targeted (e.g. `get_products`) and the timestamp the
-// controller flipped the state. The latter is surfaced as
-// `cache_age_seconds` on STALE_RESPONSE.details so buyers can reason
-// about staleness without us actually maintaining a real cache (the
-// storyboard validates wire-shape, not freshness math).
-const unavailableUpstreams = new Map<string, { upstream_name?: string; since: number }>();
+const sessions = new Map<string, SessionState>();
+
+function s(): SessionState {
+  const key = getCurrentSessionKey();
+  let state = sessions.get(key);
+  if (!state) {
+    state = {
+      orders: new Map(),
+      requestKey: new Map(),
+      deliverySim: new Map(),
+      seededProducts: new Map(),
+      seededCreatives: new Map(),
+      seededFormats: new Map(),
+      proposalsMap: new Map(),
+      createMediaBuyDirectives: new Map(),
+      unavailableUpstreams: new Map(),
+      _accountStatusOverrides: new Map(),
+      _creativeStatusOverrides: new Map(),
+    };
+    sessions.set(key, state);
+  }
+  return state;
+}
+
+// Legacy aliases — top-level identifiers that the rest of mockUpstream's
+// methods historically referenced. Each is a getter into the current session's
+// state slice. Existing call sites (`orders().get(x)`, `seededProducts().values()`,
+// etc.) keep working without source changes; the session boundary is applied
+// transparently via `s()` at access time.
+function orders() { return s().orders; }
+function requestKey() { return s().requestKey; }
+function deliverySim() { return s().deliverySim; }
+function seededProducts() { return s().seededProducts; }
+function seededCreatives() { return s().seededCreatives; }
+function seededFormats() { return s().seededFormats; }
+function proposalsMap() { return s().proposalsMap; }
+function createMediaBuyDirectives() { return s().createMediaBuyDirectives; }
+function unavailableUpstreams() { return s().unavailableUpstreams; }
 
 function generateOrderId(): string {
   return `mb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -120,23 +158,23 @@ export const mockUpstream = {
   },
 
   listProducts(): readonly PurrProductConfig[] {
-    return [...PRODUCTS, ...seededProducts.values()];
+    return [...PRODUCTS, ...seededProducts().values()];
   },
 
   listSeededProducts(): readonly PurrProductConfig[] {
-    return [...seededProducts.values()];
+    return [...seededProducts().values()];
   },
 
   hasSeededProducts(): boolean {
-    return seededProducts.size > 0;
+    return seededProducts().size > 0;
   },
 
   markUpstreamUnavailable(tool: string, upstreamName?: string): void {
-    unavailableUpstreams.set(tool, { since: Date.now(), ...(upstreamName && { upstream_name: upstreamName }) });
+    unavailableUpstreams().set(tool, { since: Date.now(), ...(upstreamName && { upstream_name: upstreamName }) });
   },
 
   hasUnavailableUpstream(tool: string): boolean {
-    return unavailableUpstreams.has(tool);
+    return unavailableUpstreams().has(tool);
   },
 
   /** Single-use consumption — the storyboard's stale_response_wire_placement
@@ -146,18 +184,18 @@ export const mockUpstream = {
    * non_emission_guard check expects no STALE_RESPONSE on a healthy
    * upstream, and AAO eval state is global across all scenarios). */
   consumeUnavailableUpstream(tool: string): { upstream_name?: string; since: number } | undefined {
-    const entry = unavailableUpstreams.get(tool);
-    if (entry) unavailableUpstreams.delete(tool);
+    const entry = unavailableUpstreams().get(tool);
+    if (entry) unavailableUpstreams().delete(tool);
     return entry;
   },
 
   getProduct(id: string): PurrProductConfig | undefined {
-    return PRODUCTS.find((p) => p.product_id === id) ?? seededProducts.get(id);
+    return PRODUCTS.find((p) => p.product_id === id) ?? seededProducts().get(id);
   },
 
   seedProduct(id: string, overrides?: Partial<PurrProductConfig> & { allowed_actions?: readonly ProductAllowedAction[] }): PurrProductConfig {
     const existing = PRODUCTS[0]!;
-    const prior = seededProducts.get(id);
+    const prior = seededProducts().get(id);
     const product: PurrProductConfig = {
       product_id: id,
       name: overrides?.name ?? prior?.name ?? `Seeded ${id}`,
@@ -204,7 +242,7 @@ export const mockUpstream = {
         format_id_refs: overrides?.format_id_refs ?? prior?.format_id_refs,
       }),
     };
-    seededProducts.set(id, product);
+    seededProducts().set(id, product);
     return product;
   },
 
@@ -222,7 +260,7 @@ export const mockUpstream = {
       floor_price?: number;
     },
   ): void {
-    const prior = seededProducts.get(productId);
+    const prior = seededProducts().get(productId);
     const base = prior ?? mockUpstream.seedProduct(productId);
     const existing = [...(base.pricing_options ?? [])];
     const dedupIdx = existing.findIndex((p) => p.pricing_option_id === option.pricing_option_id);
@@ -231,7 +269,7 @@ export const mockUpstream = {
     } else {
       existing.push(option);
     }
-    seededProducts.set(productId, {
+    seededProducts().set(productId, {
       ...base,
       pricing_options: existing,
     });
@@ -251,7 +289,7 @@ export const mockUpstream = {
    * lanes working.
    */
   hasSeededProductRequiringProvenance(): boolean {
-    for (const p of seededProducts.values()) {
+    for (const p of seededProducts().values()) {
       const cp = p.creative_policy as { provenance_required?: boolean } | undefined;
       if (cp?.provenance_required === true) return true;
     }
@@ -272,7 +310,7 @@ export const mockUpstream = {
     require_embedded_provenance?: boolean;
     require_disclosure_metadata?: boolean;
   } | null {
-    for (const p of seededProducts.values()) {
+    for (const p of seededProducts().values()) {
       const cp = p.creative_policy as {
         provenance_required?: boolean;
         provenance_requirements?: {
@@ -289,11 +327,11 @@ export const mockUpstream = {
   },
 
   seedCreative(id: string, fixture: Record<string, unknown>, accountId?: string): void {
-    seededCreatives.set(id, { ...fixture, creative_id: id, _account_id: accountId });
+    seededCreatives().set(id, { ...fixture, creative_id: id, _account_id: accountId });
   },
 
   listCreatives(accountId?: string): Array<Record<string, unknown>> {
-    const all = [...seededCreatives.values()].reverse();
+    const all = [...seededCreatives().values()].reverse();
     if (!accountId) return all;
     return all.filter((c) => {
       const owner = c['_account_id'];
@@ -302,20 +340,20 @@ export const mockUpstream = {
   },
 
   seedCreativeFormat(id: string, fixture: Record<string, unknown>): void {
-    seededFormats.set(id, { ...fixture, format_id: id });
+    seededFormats().set(id, { ...fixture, format_id: id });
   },
 
   listSeededFormats(): Array<Record<string, unknown>> {
-    return [...seededFormats.values()];
+    return [...seededFormats().values()];
   },
 
   setCreateMediaBuyDirective(accountId: string, directive: CreateMediaBuyDirective): void {
-    createMediaBuyDirectives.set(accountId, directive);
+    createMediaBuyDirectives().set(accountId, directive);
   },
 
   consumeCreateMediaBuyDirective(accountId: string): CreateMediaBuyDirective | undefined {
-    const d = createMediaBuyDirectives.get(accountId);
-    if (d) createMediaBuyDirectives.delete(accountId);
+    const d = createMediaBuyDirectives().get(accountId);
+    if (d) createMediaBuyDirectives().delete(accountId);
     return d;
   },
 
@@ -343,9 +381,9 @@ export const mockUpstream = {
     }>;
   }): MockOrder {
     if (args.client_request_id) {
-      const existing = requestKey.get(args.client_request_id);
+      const existing = requestKey().get(args.client_request_id);
       if (existing) {
-        const order = orders.get(existing);
+        const order = orders().get(existing);
         if (order) return order;
       }
     }
@@ -376,17 +414,17 @@ export const mockUpstream = {
       }),
     };
 
-    orders.set(order.order_id, order);
-    if (args.client_request_id) requestKey.set(args.client_request_id, order.order_id);
+    orders().set(order.order_id, order);
+    if (args.client_request_id) requestKey().set(args.client_request_id, order.order_id);
     return order;
   },
 
   getOrder(id: string): MockOrder | undefined {
-    return orders.get(id);
+    return orders().get(id);
   },
 
   listOrders(networkCode: string): MockOrder[] {
-    return [...orders.values()].filter((o) => o.network_code === networkCode);
+    return [...orders().values()].filter((o) => o.network_code === networkCode);
   },
 
   updateOrder(
@@ -395,7 +433,7 @@ export const mockUpstream = {
       package_budgets?: Record<string, number>;
     },
   ): MockOrder | undefined {
-    const o = orders.get(id);
+    const o = orders().get(id);
     if (!o) return undefined;
     const { package_budgets, ...rest } = patch;
     Object.assign(o, rest);
@@ -411,7 +449,7 @@ export const mockUpstream = {
   // (PR #4942) for forcing PROPOSAL_EXPIRED without burning real TTL.
   emitProposal(id: string, ttlMs: number = 24 * 3600 * 1000): void {
     const now = Date.now();
-    proposalsMap.set(id, {
+    proposalsMap().set(id, {
       issued_at: new Date(now).toISOString(),
       expires_at: new Date(now + ttlMs).toISOString(),
     });
@@ -422,13 +460,13 @@ export const mockUpstream = {
       const past = new Date(Date.now() - 60_000).toISOString();
       return { issued_at: past, expires_at: past, expired: true };
     }
-    const p = proposalsMap.get(id);
+    const p = proposalsMap().get(id);
     if (!p) return undefined;
     return { ...p, expired: new Date(p.expires_at).getTime() < Date.now() };
   },
 
   setPackageOverlay(orderId: string, productId: string, overlay: PackageOverlay): void {
-    const o = orders.get(orderId);
+    const o = orders().get(orderId);
     if (!o) return;
     o.package_overlays = o.package_overlays ?? {};
     o.package_overlays[productId] = { ...(o.package_overlays[productId] ?? {}), ...overlay };
@@ -447,7 +485,7 @@ export const mockUpstream = {
       context?: { buyer_ref?: string; correlation_id?: string };
     }>,
   ): void {
-    const o = orders.get(orderId);
+    const o = orders().get(orderId);
     if (!o) return;
     o.synth_packages = synth.map((p) => ({ ...p }));
   },
@@ -460,7 +498,7 @@ export const mockUpstream = {
     packageId: string,
     assignments: ReadonlyArray<{ creative_id: string }>,
   ): void {
-    const o = orders.get(orderId);
+    const o = orders().get(orderId);
     if (!o) return;
     o.package_creative_assignments = o.package_creative_assignments ?? {};
     o.package_creative_assignments[packageId] = [...assignments];
@@ -470,14 +508,14 @@ export const mockUpstream = {
     orderId: string,
     packageId: string,
   ): ReadonlyArray<{ creative_id: string }> {
-    const o = orders.get(orderId);
+    const o = orders().get(orderId);
     return o?.package_creative_assignments?.[packageId] ?? [];
   },
 
   getDelivery(orderId: string): MockDeliveryRow | null {
-    const o = orders.get(orderId);
+    const o = orders().get(orderId);
     if (!o) return null;
-    const sim = deliverySim.get(orderId);
+    const sim = deliverySim().get(orderId);
     return {
       order_id: o.order_id,
       impressions: sim?.impressions ?? 0,
@@ -499,7 +537,7 @@ export const mockUpstream = {
     legacy_packages?: Array<{ package_id: string; context?: { buyer_ref?: string; correlation_id?: string } }>;
     packages?: MockOrder['seeded_packages'];
   }): MockOrder {
-    const existing = orders.get(args.media_buy_id);
+    const existing = orders().get(args.media_buy_id);
     const order: MockOrder = existing ?? {
       order_id: args.media_buy_id,
       network_code: args.network_code,
@@ -517,12 +555,12 @@ export const mockUpstream = {
       order.legacy_packages = args.legacy_packages;
     }
     if (args.packages && args.packages.length > 0) order.seeded_packages = args.packages;
-    orders.set(args.media_buy_id, order);
+    orders().set(args.media_buy_id, order);
     return order;
   },
 
   forceStatus(mediaBuyId: string, status: MockOrder['status']): MockOrder['status'] | undefined {
-    const order = orders.get(mediaBuyId);
+    const order = orders().get(mediaBuyId);
     if (!order) return undefined;
     const previous = order.status;
     order.status = status;
@@ -534,18 +572,16 @@ export const mockUpstream = {
   // sync_accounts (we don't implement it). The controller pre-seeds the override
   // for any account_id passed, so the force returns a clean previous→current
   // transition even on a fresh process.
-  _accountStatusOverrides: new Map<string, 'active' | 'pending_approval' | 'rejected' | 'payment_required' | 'suspended' | 'closed'>(),
-
   getAccountStatus(accountId: string): 'active' | 'pending_approval' | 'rejected' | 'payment_required' | 'suspended' | 'closed' {
-    return this._accountStatusOverrides.get(accountId) ?? 'active';
+    return s()._accountStatusOverrides.get(accountId) ?? 'active';
   },
 
   setAccountStatus(
     accountId: string,
     status: 'active' | 'pending_approval' | 'rejected' | 'payment_required' | 'suspended' | 'closed',
   ): 'active' | 'pending_approval' | 'rejected' | 'payment_required' | 'suspended' | 'closed' {
-    const previous = this._accountStatusOverrides.get(accountId) ?? 'active';
-    this._accountStatusOverrides.set(accountId, status);
+    const previous = s()._accountStatusOverrides.get(accountId) ?? 'active';
+    s()._accountStatusOverrides.set(accountId, status);
     return previous;
   },
 
@@ -554,18 +590,13 @@ export const mockUpstream = {
   // through force_creative_status. NOT_FOUND is signalled by absence of the
   // creative in BOTH the persistent store and the seededCreatives map AND the
   // override map — the controller raises TestControllerError('NOT_FOUND').
-  _creativeStatusOverrides: new Map<
-    string,
-    { status: string; rejection_reason?: string; observed_at?: string }
-  >(),
-
   getCreativeStatus(creativeId: string): { status: string; rejection_reason?: string; observed_at?: string } | undefined {
-    const override = this._creativeStatusOverrides.get(creativeId);
+    const override = s()._creativeStatusOverrides.get(creativeId);
     if (override) return override;
     // Fallback to seeded creatives so a creative seeded via comply seed.creative
     // counts as "exists" for the NOT_FOUND probe. Default status is 'processing'
     // for newly-seeded creatives that haven't been touched by a force yet.
-    const seeded = seededCreatives.get(creativeId);
+    const seeded = seededCreatives().get(creativeId);
     if (seeded) {
       return { status: (seeded['status'] as string) ?? 'processing' };
     }
@@ -578,7 +609,7 @@ export const mockUpstream = {
     rejectionReason?: string,
   ): { status: string; rejection_reason?: string; observed_at?: string } | undefined {
     const previous = this.getCreativeStatus(creativeId);
-    this._creativeStatusOverrides.set(creativeId, {
+    s()._creativeStatusOverrides.set(creativeId, {
       status,
       observed_at: new Date().toISOString(),
       ...(rejectionReason !== undefined && { rejection_reason: rejectionReason }),
@@ -602,7 +633,7 @@ export const mockUpstream = {
     reason_code: string;
     observed_at: string;
   }> {
-    const o = orders.get(orderId);
+    const o = orders().get(orderId);
     if (!o) return [];
     const offlineStatuses = new Set(['rejected']);
     const byCreative = new Map<string, {
@@ -654,8 +685,8 @@ export const mockUpstream = {
 
   hasCreative(creativeId: string): boolean {
     return (
-      this._creativeStatusOverrides.has(creativeId) ||
-      seededCreatives.has(creativeId)
+      s()._creativeStatusOverrides.has(creativeId) ||
+      seededCreatives().has(creativeId)
     );
   },
 
@@ -663,13 +694,13 @@ export const mockUpstream = {
     mediaBuyId: string,
     delta: { impressions?: number; clicks?: number; spend?: number; currency?: string },
   ): void {
-    const prev = deliverySim.get(mediaBuyId) ?? {
+    const prev = deliverySim().get(mediaBuyId) ?? {
       impressions: 0,
       clicks: 0,
       spend: 0,
       currency: 'USD',
     };
-    deliverySim.set(mediaBuyId, {
+    deliverySim().set(mediaBuyId, {
       impressions: prev.impressions + (delta.impressions ?? 0),
       clicks: prev.clicks + (delta.clicks ?? 0),
       spend: prev.spend + (delta.spend ?? 0),
@@ -692,16 +723,8 @@ export const mockUpstream = {
   // state, so clearAll stays. The bridge's revert applies only to the
   // taskRegistry side which is handled in src/stores/index.ts.
   clearAll(): void {
-    orders.clear();
-    requestKey.clear();
-    deliverySim.clear();
-    seededProducts.clear();
-    seededCreatives.clear();
-    seededFormats.clear();
-    proposalsMap.clear();
-    createMediaBuyDirectives.clear();
-    unavailableUpstreams.clear();
-    this._accountStatusOverrides.clear();
-    this._creativeStatusOverrides.clear();
+    // Full reset — discards every session's state. Suitable for test harness
+    // and debug-only `comply_test_controller(scenario="reset_session")` paths.
+    sessions.clear();
   },
 };

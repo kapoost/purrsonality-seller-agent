@@ -42,6 +42,7 @@ import type {
 import { createHash } from 'node:crypto';
 import { PUBLISHER } from '../config/purrsonality.ts';
 import { mockUpstream } from '../upstream/mock.ts';
+import { withSession, extractSessionKey } from '../upstream/session.ts';
 import { creativesStore } from '../stores/creatives.ts';
 import { impressionsStore } from '../stores/impressions.ts';
 import type { PurrAccountMeta } from '../handlers/accounts.ts';
@@ -164,6 +165,7 @@ function validActionsForStatus(status: MediaBuyStatus): MediaBuyStatus extends n
 
 const handlers = defineSalesPlatform<PurrAccountMeta>({
   async getProducts(req: GetProductsRequest, ctx) {
+    return withSession(extractSessionKey(req), async () => {
     const r = req as {
       buying_mode?: string;
       brief?: string;
@@ -584,9 +586,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       cache_scope: 'public' as const,
       ...(combinedErrors.length > 0 && { errors: combinedErrors }),
     } satisfies GetProductsPayload;
+      });
   },
 
   async createMediaBuy(req: CreateMediaBuyRequest, ctx) {
+
+    return withSession(extractSessionKey(req), async () => {
     const account = ctx.account;
     if (!account) throw new AdcpError('ACCOUNT_NOT_FOUND', { message: 'no account in context' });
 
@@ -886,13 +891,18 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     // reached here, the directive (if any) was something other than 'submitted'.
 
     return successResponse;
+  
+    });
+
   },
 
   async updateMediaBuy(
     buyId: string,
     patch: UpdateMediaBuyRequest,
-    _ctx,
+    ctx,
   ): Promise<UpdateMediaBuySuccess> {
+
+    return withSession(extractSessionKey((ctx as { input?: unknown })?.input ?? patch), async () => {
     const existing = mockUpstream.getOrder(buyId);
     if (!existing) throw new AdcpError('MEDIA_BUY_NOT_FOUND', { message: 'media buy not found' });
 
@@ -1109,12 +1119,17 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       ...(affectedPackagesAcc.length > 0 && { affected_packages: affectedPackagesAcc }),
       revision: 2,
     } as unknown as UpdateMediaBuySuccess;
+  
+    });
+
   },
 
   async getMediaBuyDelivery(
     req: GetMediaBuyDeliveryRequest,
     ctx,
   ): Promise<GetMediaBuyDeliveryResponse> {
+
+    return withSession(extractSessionKey(req), async () => {
     const r = (req ?? {}) as { media_buy_ids?: string[]; start_date?: string; end_date?: string };
     const ids = Array.isArray(r.media_buy_ids) ? r.media_buy_ids : [];
 
@@ -1251,9 +1266,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       },
       media_buy_deliveries: deliveries,
     } as unknown as GetMediaBuyDeliveryResponse;
+  
+    });
+
   },
 
   async getMediaBuys(req: GetMediaBuysRequest, ctx): Promise<GetMediaBuysResponse> {
+
+    return withSession(extractSessionKey(req), async () => {
     const account = ctx.account;
     if (!account) {
       return { media_buys: [], pagination: { has_more: false } } as unknown as GetMediaBuysResponse;
@@ -1390,12 +1410,17 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         };
       }),
     } as unknown as GetMediaBuysResponse;
+  
+    });
+
   },
 
   async listCreativeFormats(
     req: ListCreativeFormatsRequest,
     _ctx,
   ) {
+
+    return withSession(extractSessionKey(req), async () => {
     const r = (req ?? {}) as {
       pagination?: { max_results?: number; cursor?: string };
       format_ids?: ReadonlyArray<{ agent_url?: string; id: string } | string>;
@@ -1462,9 +1487,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         total_count: allFormats.length,
       },
     } as unknown as ListCreativeFormatsResponse;
+  
+    });
+
   },
 
   async syncCreatives(creatives, ctx): Promise<SyncCreativesRow[]> {
+
+    return withSession(extractSessionKey(ctx.input), async () => {
     const list = Array.isArray(creatives) ? creatives : [];
     const accountId = ctx.account?.id;
     const accountIdHash = hashAccountId(accountId);
@@ -1809,9 +1839,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       } as SyncCreativesRow);
     }
     return results;
+  
+    });
+
   },
 
   async listCreatives(req: ListCreativesRequest, ctx): Promise<ListCreativesResponse> {
+
+    return withSession(extractSessionKey(req), async () => {
     const r = (req ?? {}) as { pagination?: { max_results?: number; cursor?: string } };
     const accountIdHash = hashAccountId(ctx.account?.id);
     const persistent = await creativesStore.list({
@@ -1934,6 +1969,9 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         total_count: normalized.length,
       },
     } as unknown as ListCreativesResponse;
+  
+    });
+
   },
 });
 
