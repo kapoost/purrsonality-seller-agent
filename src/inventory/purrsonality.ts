@@ -1494,6 +1494,9 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
 
   async syncCreatives(creatives, ctx): Promise<SyncCreativesRow[]> {
 
+    // DEBUG: log what we got
+    const ctxAny = ctx as { input?: { context?: { correlation_id?: string } } } | undefined;
+    console.log('[DEBUG_SYNC] ctx.input.context.correlation_id=', ctxAny?.input?.context?.correlation_id, 'ctx.input keys=', ctxAny?.input ? Object.keys(ctxAny.input) : 'no-input');
     return withSession(extractSessionKey(ctx.input), async () => {
     const list = Array.isArray(creatives) ? creatives : [];
     const accountId = ctx.account?.id;
