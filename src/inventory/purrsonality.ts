@@ -1467,7 +1467,18 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     // built-in entry if it matches.
     const hasFormatFilter = Array.isArray(r.format_ids) && r.format_ids.length > 0;
     const inPaginationTest = !hasFormatFilter && r.pagination !== undefined && seeded.length > 0;
-    let allFormats = inPaginationTest ? seeded : [...builtIn, ...seeded];
+    // Dedupe by format_id.id — auto-seeded formats from neighboring product
+    // fixtures (display_300x250, display_responsive…) collide with the
+    // builtIn catalog; the storyboard's `formats[0].format_id` round-trip
+    // assertion needs a single canonical entry per id.
+    const seenFormatIds = new Set<string>();
+    let allFormats = (inPaginationTest ? seeded : [...builtIn, ...seeded])
+      .filter((f) => {
+        const id = f.format_id?.id;
+        if (typeof id !== 'string' || seenFormatIds.has(id)) return false;
+        seenFormatIds.add(id);
+        return true;
+      });
     if (hasFormatFilter) {
       const wantedIds = new Set(
         r.format_ids!.map((f) => (typeof f === 'string' ? f : f.id)),
