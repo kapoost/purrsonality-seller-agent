@@ -14,6 +14,18 @@ type ComplyControllerConfigWithProvenanceQuery = ComplyControllerConfig & {
     params: { creative_id: string; [k: string]: unknown },
     ctx: { input: Record<string, unknown> },
   ) => Promise<unknown> | unknown;
+} & {
+  // 3.1 pagination_integrity_list_accounts seeds 3 sandbox accounts via
+  // comply_test_controller(scenario=seed_account). SDK 9.x's typed seed
+  // block doesn't expose seed_account in the typed config, so we widen
+  // the type to attach the adapter; SDK's dispatcher routes by scenario
+  // name at runtime regardless of the declared field.
+  seed?: ComplyControllerConfig['seed'] & {
+    account?: (
+      params: { account_id: string; fixture?: Record<string, unknown> },
+      ctx: { input: Record<string, unknown> },
+    ) => Promise<unknown> | unknown;
+  };
 };
 
 function mockStatus(wire: string): 'confirmed' | 'delivering' | 'paused' | 'completed' {
@@ -218,6 +230,12 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
     },
     creative_format: async (params) => {
       mockUpstream.seedCreativeFormat(params.format_id, params.fixture);
+    },
+    account: async (params) => {
+      // 3.1 pagination_integrity_list_accounts seeds sandbox accounts that
+      // list_accounts MUST return. Persist on mockUpstream; the accountStore
+      // list handler reads from there + the primary singleton.
+      mockUpstream.seedAccount(params.account_id, params.fixture ?? {});
     },
     media_buy: async (params) => {
       const fixture = params.fixture as {

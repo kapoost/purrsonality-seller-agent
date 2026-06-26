@@ -90,6 +90,7 @@ const deliverySim = new Map<
 const seededProducts = new Map<string, PurrProductConfig>();
 const seededCreatives = new Map<string, Record<string, unknown>>();
 let creativeSeq = 0;
+const seededAccounts = new Map<string, Record<string, unknown>>();
 const seededFormats = new Map<string, Record<string, unknown>>();
 const proposalsMap = new Map<string, { issued_at: string; expires_at: string }>();
 
@@ -310,6 +311,14 @@ export const mockUpstream = {
       const owner = c['_account_id'];
       return owner === undefined || owner === accountId;
     });
+  },
+
+  seedAccount(accountId: string, fixture: Record<string, unknown>): void {
+    seededAccounts.set(accountId, { ...fixture, account_id: accountId });
+  },
+
+  listSeededAccounts(): ReadonlyArray<Record<string, unknown>> {
+    return [...seededAccounts.values()];
   },
 
   seedCreativeFormat(id: string, fixture: Record<string, unknown>): void {

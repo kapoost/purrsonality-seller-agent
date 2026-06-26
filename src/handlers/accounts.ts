@@ -1,5 +1,6 @@
 import type { AccountStore, Account } from '@adcp/sdk/server';
 import { PUBLISHER } from '../config/purrsonality.ts';
+import { mockUpstream } from '../upstream/mock.ts';
 
 export interface PurrAccountMeta {
   network_code: string;
@@ -75,11 +76,30 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
     return buildAccount({ mode: 'live' } as Partial<Account<PurrAccountMeta>>);
   },
   // Single-publisher first-party model: each principal resolves to one account
-  // (sandbox/live differ only by mode). pagination_integrity_list_accounts/*
-  // fails on this; see adcontextprotocol/adcp#4914 — runner gap, not impl bug.
-  list: async (_filter, ctx) => {
-    const account = accountForPrincipal(ctx?.authInfo?.clientId);
-    return { items: [account] };
+  // (sandbox/live differ only by mode). 3.1 pagination_integrity_list_accounts
+  // requires multi-account list — we surface comply-seeded sandbox accounts
+  // alongside the primary singleton so the storyboard's max_results=2 +
+  // continuation walk has the three accounts it needs.
+  list: async (filter, ctx) => {
+    const primary = accountForPrincipal(ctx?.authInfo?.clientId);
+    const sandbox = mockUpstream.listSeededAccounts().map((fixture) => {
+      const fx = fixture as { account_id?: string; brand?: { domain?: string }; operator?: string };
+      return {
+        id: fx.account_id ?? `seeded_${Date.now()}`,
+        name: fx.account_id ?? 'Seeded sandbox account',
+        status: 'active' as const,
+        ctx_metadata: { network_code: PUBLISHER.network_code },
+        mode: 'sandbox',
+        ...(fx.operator && { operator: fx.operator }),
+        ...(fx.brand?.domain && { brand: { domain: fx.brand.domain } }),
+      } as Account<PurrAccountMeta>;
+    });
+    const items = [primary, ...sandbox];
+    // Filter to sandbox-only when the wire request carried sandbox: true
+    // (pagination_integrity_list_accounts/first_page sends `sandbox: true`).
+    const filterAny = filter as { sandbox?: boolean } | undefined;
+    const filtered = filterAny?.sandbox === true ? sandbox : items;
+    return { items: filtered };
   },
   // sync_accounts surface — 3.1 measurement_accountability + delivery_reporting
   // storyboards drive setup through this before exercising main assertions.
