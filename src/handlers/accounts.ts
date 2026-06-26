@@ -82,19 +82,28 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
     return { items: [account] };
   },
   // sync_accounts surface — 3.1 measurement_accountability + delivery_reporting
-  // storyboards drive setup through this before exercising the metrics-filter
-  // assertions. Single-publisher reference impl has nothing to write upstream,
-  // so we acknowledge each ref as `unchanged` (idempotent no-op) and echo the
-  // resolved account back. The framework normalises the wire; we just need to
-  // return a row per ref so the storyboard's `accounts[0].account_id` field
-  // capture lands.
+  // storyboards drive setup through this before exercising main assertions.
+  // 3.1 notification_config_lifecycle additionally drives subscriber registration
+  // through here: each wire account carries `notification_configs[]`, the seller
+  // persists per (account_id, subscriber_id), and the response echoes the stored
+  // bindings back. Single-publisher reference impl has nothing to write upstream,
+  // so we acknowledge each ref as `unchanged` (idempotent no-op), thread any
+  // notification_configs from the wire body (`ctx.input.accounts[i].notification_configs`),
+  // and echo them verbatim on the per-account row.
   upsert: async (refs, ctx) => {
     const account = accountForPrincipal(ctx?.authInfo?.clientId);
+    const wireBody = ((ctx as unknown as { input?: { accounts?: Array<{ notification_configs?: unknown }> } } | undefined)?.input)?.accounts;
     return {
-      accounts: refs.map(() => ({
-        account: account as never,
-        action: 'unchanged' as const,
-      })),
+      accounts: refs.map((_ref, i) => {
+        const notification_configs = wireBody?.[i]?.notification_configs;
+        return {
+          account: account as never,
+          action: 'unchanged' as const,
+          ...(Array.isArray(notification_configs) && notification_configs.length > 0 && {
+            notification_configs: notification_configs as never,
+          }),
+        };
+      }),
     } as never;
   },
 };
