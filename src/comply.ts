@@ -156,6 +156,18 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
           channel: fixture.channels[0] as 'display' | 'video' | 'ctv' | 'audio',
         }),
       });
+      // 3.1 product_discovery/schema_validation format_id_reconciliation
+      // assertions require every product.format_ids entry to resolve in
+      // list_creative_formats. Auto-seed any format the fixture references
+      // so the format catalog is a superset of the product catalog.
+      if (Array.isArray(fixture.format_ids)) {
+        for (const f of fixture.format_ids) {
+          const fid = typeof f === 'string' ? f : f?.id;
+          if (typeof fid === 'string' && fid.length > 0) {
+            mockUpstream.seedCreativeFormat(fid, { name: fid });
+          }
+        }
+      }
     },
     pricing_option: async (params) => {
       const fixture = params.fixture as {
