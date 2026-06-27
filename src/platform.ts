@@ -31,7 +31,7 @@ export const platform = definePlatform<null, PurrAccountMeta>({
     // without it `evaluate_agent_quality` refuses with "(none advertised)".
     // We honour 3.0 (badge-eligible) AND 3.1-rc (SDK 9.x natively emits
     // the rc14 envelope shape with status / media_buy_status split).
-    supported_versions: ['3.0', '3.1-rc'] as const,
+    supported_versions: ['3.0', '3.1', '3.1-rc'] as const,
     // Compliance testing advertisement on `get_adcp_capabilities`. Mirrors
     // what the SDK's live `comply_test_controller.list_scenarios` probe
     // actually returns at runtime, NOT the full set we wire in src/comply.ts.

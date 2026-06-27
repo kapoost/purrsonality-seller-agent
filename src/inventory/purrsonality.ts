@@ -251,7 +251,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       raw = raw.filter((p) => {
         const explicit = (p as { available_metrics?: ReadonlyArray<string> }).available_metrics;
         const have: ReadonlyArray<string> = explicit
-          ?? ((p.channel === 'ctv' || (p.channel as string) === 'video') ? VIDEO_METRICS : DISPLAY_METRICS);
+          ?? ((p.channel === 'ctv' || p.channel === 'olv') ? VIDEO_METRICS : DISPLAY_METRICS);
         return wantedMetrics.every((m) => have.includes(m));
       });
     }
@@ -342,7 +342,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           // via channel: matches measurement_accountability storyboard's
           // `filters.required_metrics: ['completed_views']` for the seeded
           // ctv_premium_completed_views fixture.
-          available_metrics: (p.channel === 'ctv' || (p.channel as string) === 'video')
+          available_metrics: (p.channel === 'ctv' || p.channel === 'olv')
             ? ['impressions', 'spend', 'clicks', 'views', 'completed_views', 'completion_rate']
             : ['impressions', 'spend', 'clicks'],
           date_range_support: 'date_range',

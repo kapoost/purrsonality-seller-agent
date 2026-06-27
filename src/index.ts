@@ -75,6 +75,34 @@ serve(
         };
         return ctxAny.authInfo?.clientId ?? ctxAny.account?.id ?? 'anonymous';
       },
+      // version_negotiation/get_capabilities_with_version requires the seller
+      // to echo `adcp_version` on the envelope. SDK 9.x's regular dispatch
+      // path already injects it via injectVersionIntoResponse, but the
+      // auto-registered `get_adcp_capabilities` handler bypasses that wrapper
+      // and returns capabilitiesResponse(data) directly through
+      // applyResponseEnhancer. Wire it here so the discovery surface also
+      // echoes the served release (advisory at 3.1, blocking at 3.2).
+      responseEnhancer: (response) => {
+        const sc = (response as { structuredContent?: Record<string, unknown> }).structuredContent;
+        if (sc && typeof sc === 'object' && !('adcp_version' in sc)) {
+          sc.adcp_version = '3.1';
+        }
+        const content = (response as { content?: Array<{ type: string; text?: string }> }).content;
+        if (Array.isArray(content)) {
+          const first = content[0];
+          if (first?.type === 'text' && typeof first.text === 'string') {
+            try {
+              const parsed = JSON.parse(first.text) as Record<string, unknown>;
+              if (parsed && typeof parsed === 'object' && !('adcp_version' in parsed)) {
+                parsed.adcp_version = '3.1';
+                first.text = JSON.stringify(parsed);
+              }
+            } catch {
+              // Text isn't JSON — leave it alone.
+            }
+          }
+        }
+      },
       // RFC 9421 verifier intentionally not wired here. SDK guard rejects
       // signedRequests config when 'signed-requests' is absent from
       // platform.capabilities.specialisms (see create-adcp-server.js:1454).

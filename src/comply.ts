@@ -165,7 +165,14 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
           vendor_metrics: fixture.reporting_capabilities.vendor_metrics,
         }),
         ...(Array.isArray(fixture.channels) && fixture.channels.length > 0 && {
-          channel: fixture.channels[0] as 'display' | 'video' | 'ctv' | 'audio',
+          // 3.1 dropped `video` → `olv` and `audio` → `streaming_audio` from the
+          // channel enum; scenarios still seed legacy literals so normalize on entry.
+          channel: ((): 'display' | 'olv' | 'ctv' | 'streaming_audio' => {
+            const raw = String(fixture.channels[0]);
+            if (raw === 'video') return 'olv';
+            if (raw === 'audio') return 'streaming_audio';
+            return raw as 'display' | 'olv' | 'ctv' | 'streaming_audio';
+          })(),
         }),
       });
       // 3.1 product_discovery/schema_validation format_id_reconciliation
