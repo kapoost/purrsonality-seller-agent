@@ -316,26 +316,25 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
       }
 
       // Persist with replace-by-subscriber_id semantics. Empty array clears
-      // (notification_config_lifecycle/sync_accounts_clear_subscribers). Omit
-      // ⇒ no-op (preserve any existing state).
+      // (notification_config_lifecycle/sync_accounts_clear_subscribers) — we
+      // store the empty array rather than deleting so subsequent list_accounts
+      // calls echo the empty array (storyboard validates
+      // `field_present: accounts[0].notification_configs`). Omitting the
+      // field on the request is a no-op (preserves any existing state).
       if (Array.isArray(configs)) {
-        if (configs.length === 0) {
-          notificationConfigsByAccount.delete(accountId);
-        } else {
-          notificationConfigsByAccount.set(
-            accountId,
-            configs
-              .filter((c): c is { subscriber_id: string; url: string; event_types: readonly string[]; active: boolean } =>
-                typeof c?.subscriber_id === 'string' && typeof c.url === 'string'
-                && Array.isArray(c.event_types) && typeof c.active === 'boolean')
-              .map((c) => ({
-                subscriber_id: c.subscriber_id,
-                url: c.url,
-                event_types: c.event_types,
-                active: c.active,
-              })),
-          );
-        }
+        notificationConfigsByAccount.set(
+          accountId,
+          configs
+            .filter((c): c is { subscriber_id: string; url: string; event_types: readonly string[]; active: boolean } =>
+              typeof c?.subscriber_id === 'string' && typeof c.url === 'string'
+              && Array.isArray(c.event_types) && typeof c.active === 'boolean')
+            .map((c) => ({
+              subscriber_id: c.subscriber_id,
+              url: c.url,
+              event_types: c.event_types,
+              active: c.active,
+            })),
+        );
       }
       const persisted = notificationConfigsByAccount.get(accountId);
 
