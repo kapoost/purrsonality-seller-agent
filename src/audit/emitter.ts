@@ -14,9 +14,19 @@
 // decide whether to fail the wire response.
 
 import { commitment, hashAgentAccount, type Event } from './commitment.ts';
-import { advanceChain, getPrevHash } from './chain.ts';
+import { advanceChain, getPrevHash, resetChainHead } from './chain.ts';
 import { loadAuditKey } from './keys.ts';
 import { signEventJws } from './signing.ts';
+
+// Veles' CHAIN_BROKEN error message format (from internal/mcp/tools.go):
+//   `prev_event_hash = 0x… but last known commitment for this agent = 0x…`
+// Parse out the "expected" head so the emitter can self-recover after a
+// seller restart that wiped the in-memory chain cache.
+const CHAIN_BROKEN_HEAD_RE = /last known commitment for this agent = (0x[0-9a-f]{64})/i;
+function parseChainBrokenHead(message: string): string | null {
+  const m = CHAIN_BROKEN_HEAD_RE.exec(message);
+  return m ? m[1]! : null;
+}
 
 export interface EmitterConfig {
   velesURL: string; // e.g. https://veles.purrsonality.rocketscience.pl/mcp
@@ -59,6 +69,58 @@ export function canEmit(): boolean {
  */
 export async function emitEvent(cfg: EmitterConfig, opts: EmitOpts): Promise<EmittedAnchor> {
   const createdAt = opts.createdAt ?? isoNow();
+  const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+  // Try once; on CHAIN_BROKEN parse the expected head out of Veles' error,
+  // advance local state to that head, and retry exactly once. Covers the
+  // common case where seller's in-memory cache was reset (deploy/restart)
+  // but the persistent backend was also empty (or stale) — Veles' head is
+  // the authoritative pointer, so trusting it is the cheapest recovery.
+  let result = await attempt(cfg, opts, createdAt, timeoutMs);
+  if (result.kind === 'chain_broken' && result.expectedHead) {
+    await resetChainHead(cfg.agentURL, result.expectedHead);
+    result = await attempt(cfg, opts, createdAt, timeoutMs);
+  }
+
+  if (result.kind === 'ok') {
+    await advanceChain(cfg.agentURL, result.commit);
+    return {
+      attestor_url: cfg.velesURL,
+      event_commitment: result.commit,
+      proof_id: `veles:1:${result.commit}`,
+    };
+  }
+
+  // Pending path — kick off a background submit that may or may not
+  // land, then ship the wire response immediately with a pending id.
+  // Pending ids are namespaced ("pending:<commit>") so verify_proof
+  // distinguishes them from confirmed ones.
+  void backgroundSubmit(cfg, {
+    agent_url: cfg.agentURL,
+    event_commitment: result.commit,
+    prev_event_hash: result.prevHash,
+    signature: result.jws,
+  }, result.commit);
+
+  return {
+    attestor_url: cfg.velesURL,
+    event_commitment: result.commit,
+    proof_id: `veles:1:pending:${result.commit}`,
+    pending: true,
+  };
+}
+
+type AttemptResult =
+  | { kind: 'ok'; commit: string; prevHash: string; jws: string }
+  | { kind: 'pending'; commit: string; prevHash: string; jws: string; reason: string }
+  | { kind: 'chain_broken'; commit: string; prevHash: string; jws: string; expectedHead: string | null };
+
+async function attempt(
+  cfg: EmitterConfig,
+  opts: EmitOpts,
+  createdAt: string,
+  timeoutMs: number,
+): Promise<AttemptResult> {
   const prevHash = await getPrevHash(cfg.agentURL);
   const event: Event = {
     event_type: opts.eventType,
@@ -71,13 +133,9 @@ export async function emitEvent(cfg: EmitterConfig, opts: EmitOpts): Promise<Emi
     created_at: createdAt,
     prev_event_hash: prevHash,
   };
-
-  // Compute commitment + sign (deterministic; ~1ms).
   const commit = commitment(event);
   const jws = signEventJws(event);
 
-  // Submit to Veles with the configured timeout.
-  const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const submitted = await submitWithTimeout(cfg, {
     agent_url: cfg.agentURL,
     event_commitment: commit,
@@ -85,32 +143,15 @@ export async function emitEvent(cfg: EmitterConfig, opts: EmitOpts): Promise<Emi
     signature: jws,
   }, timeoutMs);
 
-  if (submitted.ok) {
-    await advanceChain(cfg.agentURL, commit);
-    return {
-      attestor_url: cfg.velesURL,
-      event_commitment: commit,
-      proof_id: `veles:1:${commit}`,
-    };
+  if (submitted.ok) return { kind: 'ok', commit, prevHash, jws };
+
+  // Recognize Veles' CHAIN_BROKEN tool error: error message is
+  // "CHAIN_BROKEN: prev_event_hash = … but last known commitment for this agent = …"
+  if (submitted.reason.startsWith('CHAIN_BROKEN')) {
+    const expectedHead = parseChainBrokenHead(submitted.reason);
+    return { kind: 'chain_broken', commit, prevHash, jws, expectedHead };
   }
-
-  // Pending path — kick off a background submit that may or may not
-  // land, then ship the wire response immediately with a pending id.
-  // Pending ids are namespaced ("pending:<commit>") so verify_proof
-  // distinguishes them from confirmed ones.
-  void backgroundSubmit(cfg, {
-    agent_url: cfg.agentURL,
-    event_commitment: commit,
-    prev_event_hash: prevHash,
-    signature: jws,
-  }, commit);
-
-  return {
-    attestor_url: cfg.velesURL,
-    event_commitment: commit,
-    proof_id: `veles:1:pending:${commit}`,
-    pending: true,
-  };
+  return { kind: 'pending', commit, prevHash, jws, reason: submitted.reason };
 }
 
 interface SubmitParams {

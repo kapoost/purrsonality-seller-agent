@@ -66,6 +66,18 @@ const IMPRESSIONS_MIGRATION = `
   CREATE INDEX IF NOT EXISTS impressions_event_ts_idx ON impressions (event_type, ts DESC);
 `;
 
+// Per-agent_url last-commitment chain head for the Veles audit emitter.
+// Replaces the fs-based AUDIT_CHAIN_STATE_PATH which silently failed on
+// Fly because seller's machine had no /data volume mount — every restart
+// reset the chain to ZERO_PREV and Veles rejected with CHAIN_BROKEN.
+const AUDIT_CHAIN_STATE_MIGRATION = `
+  CREATE TABLE IF NOT EXISTS audit_chain_state (
+    agent_url TEXT PRIMARY KEY,
+    last_commitment TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+`;
+
 export async function runMigrations(): Promise<void> {
   const pool = getPool();
   if (!pool) {
@@ -79,5 +91,6 @@ export async function runMigrations(): Promise<void> {
   await pool.query(METRICS_EVENTS_MIGRATION);
   await pool.query(CREATIVES_MIGRATION);
   await pool.query(IMPRESSIONS_MIGRATION);
+  await pool.query(AUDIT_CHAIN_STATE_MIGRATION);
   console.log('[db] Migrations complete.');
 }
