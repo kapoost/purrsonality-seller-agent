@@ -32,6 +32,16 @@ export const platform = definePlatform<null, PurrAccountMeta>({
     // dependent storyboard. Both billing modes route to the same sandbox
     // account on this single-publisher reference impl.
     supportedBillings: ['agent', 'operator'] as const,
+    // Override the SDK's derivation from `accountStore.resolution: 'explicit'`.
+    // `require_operator_auth: true` semantically means "operators authenticate
+    // independently with the seller via OAuth"; purrsonality has no operator
+    // OAuth — the buyer's bearer principal is mapped 1:1 to the sandbox
+    // account, so the buyer never needs a separate operator token. Setting
+    // false is more accurate AND lifts the SDK runner's blanket-skip of
+    // sync_accounts steps (see SDK runner.ts: when require_operator_auth=true
+    // it grades every sync_accounts step as `not_applicable` for the
+    // notification_config_lifecycle storyboard among others).
+    requireOperatorAuth: false,
     config: null,
     // Advertise release-precision AdCP versions we speak. Slot landed in
     // SDK 9.0.0 via PR #2201 closing #2199. AAO comply runner gates
