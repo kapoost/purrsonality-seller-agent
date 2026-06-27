@@ -1224,6 +1224,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       }
 
       resolvedCurrency = currency;
+      // Per-buy clamp guards the same NaN/negative path the aggregate clamp
+      // catches; without it, schema validation still trips on
+      // media_buy_deliveries[].totals.impressions / .spend / .clicks.
+      impressions = Number.isFinite(impressions) && impressions >= 0 ? impressions : 0;
+      spend = Number.isFinite(spend) && spend >= 0 ? spend : 0;
+      clicks = Number.isFinite(clicks) && clicks >= 0 ? clicks : 0;
       aggImpressions += impressions;
       aggSpend += spend;
       aggClicks += clicks;
@@ -1296,18 +1302,19 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       };
     });
 
+    // `Math.max(0, x)` doesn't catch NaN — `Math.max(0, NaN) === NaN` and
+    // schema `minimum: 0` rejects NaN. The simulator yields NaN when the buy
+    // carries NaN/undefined budget or non-parseable flight dates, which is
+    // exactly the path the comply runner exercises (storyboard create may
+    // omit `total_budget` and rely on the seller-default).
+    const safeNum = (x: number): number => (Number.isFinite(x) && x >= 0 ? x : 0);
     return {
       reporting_period: { start: periodStart, end: periodEnd },
       currency: resolvedCurrency,
       aggregated_totals: {
-        // Schema enforces `minimum: 0` on these aggregates. Clamp at the
-        // emission edge: 3.1 storyboards fail get_delivery on any negative
-        // total even when the underlying per-buy values are also clamped,
-        // because float arithmetic across many small simulator-derived
-        // numbers can land on a tiny negative residue after rounding.
-        impressions: Math.max(0, aggImpressions),
-        spend: Math.max(0, aggSpend),
-        clicks: Math.max(0, aggClicks),
+        impressions: safeNum(aggImpressions),
+        spend: safeNum(aggSpend),
+        clicks: safeNum(aggClicks),
         media_buy_count: deliveries.length,
       },
       media_buy_deliveries: deliveries,
