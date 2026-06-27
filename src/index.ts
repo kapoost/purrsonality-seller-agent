@@ -160,6 +160,14 @@ serve(
         if (/^demo-acme-outdoor-v\d+$/.test(token)) {
           return { principal: 'compliance-runner' };
         }
+        // billing-gate-runner test kit: this bearer family is the spoofable
+        // test principal for `commercial_relationship: passthrough_only` per
+        // training-agent/commercial-relationships.ts. sync_accounts MUST
+        // reject `billing: agent` with BILLING_NOT_PERMITTED_FOR_AGENT for
+        // this principal — see handlers/accounts.ts upsert.
+        if (/^demo-billing-passthrough-v\d+$/.test(token)) {
+          return { principal: 'compliance-runner-passthrough' };
+        }
         return null;
       },
     }),
