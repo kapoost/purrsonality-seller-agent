@@ -73,6 +73,14 @@ interface PersistedNotificationConfig {
 }
 const notificationConfigsByAccount: Map<string, PersistedNotificationConfig[]> = new Map();
 
+// Per-account brand+operator, captured at provisioning time. Settings-update
+// mode (`accounts[i].account.account_id`) doesn't carry brand/operator on the
+// request — sync-accounts-response.json requires both on every echoed row, so
+// the seller MUST look them up from the prior provisioning state. Without
+// this lookup, the response per-row was `brand: undefined, operator: ""` and
+// failed schema validation on the replace_pause_and_clear storyboard step.
+const accountKeyByAccount: Map<string, { brand: { domain: string }; operator: string }> = new Map();
+
 // 3.1 notification-type.json splits into two anchor surfaces:
 //   - account-level: `creative.*`, `product.*`, `signal.*`,
 //     `wholesale_feed.bulk_change`
@@ -210,6 +218,22 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
       const accountId = wireAccountId ?? refAny.account_id ?? account.id;
       const isSettingsUpdate = wireAccountId !== undefined || refAny.account_id !== undefined;
 
+      // Resolve brand + operator on the response. For provisioning mode they
+      // come from the wire entry root; for settings-update they're absent on
+      // the wire and we look them up from the stored provisioning state.
+      // sync-accounts-response.json marks both as required on every echoed row.
+      const wireBrand = (wire?.brand ?? (refAny.brand as { domain?: string } | undefined));
+      const wireOperator = wire?.operator ?? refAny.operator;
+      const stored = accountKeyByAccount.get(accountId);
+      const brand = wireBrand?.domain ? wireBrand : stored?.brand;
+      const operator = wireOperator ?? stored?.operator ?? 'unknown.example';
+      if (wireBrand?.domain && wireOperator) {
+        accountKeyByAccount.set(accountId, {
+          brand: { domain: wireBrand.domain },
+          operator: wireOperator,
+        });
+      }
+
       // Per-buyer-agent commercial gate: passthrough-only callers may only
       // submit billing: operator. Submit billing: agent → reject the entry
       // with BILLING_NOT_PERMITTED_FOR_AGENT carrying the clamped details
@@ -220,8 +244,8 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
       if (isPassthroughOnly && wire?.billing === 'agent') {
         return {
           account_id: accountId,
-          brand: (wire?.brand ?? refAny.brand) as never,
-          operator: (wire?.operator ?? refAny.operator) ?? '',
+          brand: brand as never,
+          operator: operator,
           action: 'failed' as const,
           status: 'rejected' as const,
           errors: [{
@@ -251,8 +275,8 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
             if (seen.has(cfg.subscriber_id)) {
               return {
                 account_id: accountId,
-                brand: (wire?.brand ?? refAny.brand) as never,
-                operator: (wire?.operator ?? refAny.operator) ?? '',
+                brand: brand as never,
+                operator: operator,
                 action: 'failed' as const,
                 status: 'rejected' as const,
                 errors: [{
@@ -274,8 +298,8 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
               if (et !== undefined && isMediaBuyAnchoredEvent(et)) {
                 return {
                   account_id: accountId,
-                  brand: (wire?.brand ?? refAny.brand) as never,
-                  operator: (wire?.operator ?? refAny.operator) ?? '',
+                  brand: brand as never,
+                  operator: operator,
                   action: 'failed' as const,
                   status: 'rejected' as const,
                   errors: [{
@@ -321,8 +345,8 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
 
       return {
         account_id: accountId,
-        brand: (wire?.brand ?? refAny.brand) as never,
-        operator: (wire?.operator ?? refAny.operator) ?? '',
+        brand: brand as never,
+        operator: operator,
         name: account.name,
         action,
         status: 'active' as const,
