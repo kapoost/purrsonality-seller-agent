@@ -11,6 +11,14 @@ const envSchema = z.object({
   PUBLIC_BASE_URL: z.string().url().default('http://127.0.0.1:3001'),
   DATABASE_URL: z.string().optional(),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  // Veles audit attestor (Phase A). All four below must be set together
+  // for the seller to attach audit_anchor to media-buy responses.
+  // Generate the keypair via: bun run scripts/gen-audit-key.ts
+  AUDIT_PRIVATE_KEY_PEM: z.string().optional(),
+  AUDIT_KEY_ID: z.string().optional(),
+  VELES_URL: z.string().url().optional(),
+  VELES_SUBMIT_TOKEN: z.string().optional(),
+  AUDIT_CHAIN_STATE_PATH: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

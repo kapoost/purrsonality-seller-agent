@@ -44,6 +44,7 @@ import { PUBLISHER } from '../config/purrsonality.ts';
 import { mockUpstream } from '../upstream/mock.ts';
 import { creativesStore } from '../stores/creatives.ts';
 import { impressionsStore } from '../stores/impressions.ts';
+import { tryEmitAuditAnchor } from '../audit/index.ts';
 import type { PurrAccountMeta } from '../handlers/accounts.ts';
 import type { InventoryAdapter } from './base.ts';
 import { simulateDelivery } from './sandbox/delivery-simulator.ts';
@@ -895,6 +896,22 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     // submitted-arm directive is handled at the top of the handler; if we
     // reached here, the directive (if any) was something other than 'submitted'.
 
+    // Veles audit anchor — emitted only when the audit module is
+    // configured (env: AUDIT_PRIVATE_KEY_PEM + AUDIT_KEY_ID + VELES_URL).
+    // Hot-path budget: 200ms. On timeout or transport error, the emitter
+    // returns a `pending` proof_id and retries in background; the buyer
+    // still sees an audit_anchor field on the response.
+    const anchor = await tryEmitAuditAnchor({
+      eventType: 'create_media_buy',
+      mediaBuyId: order.order_id,
+      accountId: account.id,
+      committedBudgetMajor: totalBudget,
+      currency,
+    });
+    if (anchor) {
+      (successResponse as unknown as { audit_anchor: typeof anchor }).audit_anchor = anchor;
+    }
+
     return successResponse;
   },
 
@@ -1109,7 +1126,22 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     const updated = mockUpstream.getOrder(buyId)!;
     const newWireStatus = mockToWireStatus(updated.status);
     const postAvailableActions = filterByStatus(buyAllActions, newWireStatus);
-    return {
+
+    // Veles audit anchor on update_media_buy. Same convention as
+    // create_media_buy above: skip if unconfigured, never block buyer
+    // hot path. We anchor against the order's current total budget
+    // (post-update) — the spec field tracks committed_budget per event,
+    // so an update with no budget change is still a meaningful audit
+    // datapoint (it pins lifecycle events into the chain).
+    const updAnchor = await tryEmitAuditAnchor({
+      eventType: 'update_media_buy',
+      mediaBuyId: buyId,
+      accountId: updated.advertiser_id,
+      committedBudgetMajor: updated.budget,
+      currency: updated.currency,
+    });
+
+    const response = {
       media_buy_id: buyId,
       status: newWireStatus,
       valid_actions: validActionsForStatus(newWireStatus),
@@ -1118,7 +1150,9 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       ...(updated.canceled_at && { canceled_at: updated.canceled_at }),
       ...(affectedPackagesAcc.length > 0 && { affected_packages: affectedPackagesAcc }),
       revision: 2,
-    } as unknown as UpdateMediaBuySuccess;
+      ...(updAnchor && { audit_anchor: updAnchor }),
+    };
+    return response as unknown as UpdateMediaBuySuccess;
   },
 
   async getMediaBuyDelivery(

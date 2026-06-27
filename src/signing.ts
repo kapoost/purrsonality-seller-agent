@@ -63,10 +63,15 @@ const TEST_KEYS: AdcpJsonWebKey[] = [
 
 export const jwksResolver = new StaticJwksResolver(TEST_KEYS);
 
-// Wire-public JWKS exposed at /.well-known/jwks.json. Strips nothing —
-// the keys above are already public-only (no `d` field). Used by buyer
-// SDKs that prefer JWKS-over-HTTPS discovery over an inline test keypair.
-export const publicJwks = { keys: TEST_KEYS } satisfies { keys: AdcpJsonWebKey[] };
+// Wire-public JWKS exposed at /.well-known/jwks.json. Includes:
+//   - the AdCP request-signing test keys (kid prefixed `test-*`)
+//   - the audit Ed25519 key (kid from AUDIT_KEY_ID env), if configured
+// The audit key carries adcp_use=audit-attestor so the SDK's request-
+// signing verifier ignores it and only Veles consumes it via JWS verify.
+import { auditPublicJwk } from './audit/jwks.ts';
+const auditJwk = auditPublicJwk();
+const allPublicKeys: AdcpJsonWebKey[] = auditJwk ? [...TEST_KEYS, auditJwk] : TEST_KEYS;
+export const publicJwks = { keys: allPublicKeys } satisfies { keys: AdcpJsonWebKey[] };
 
 // Replay cache: Postgres when DATABASE_URL is set (REPLAY_CACHE_MIGRATION
 // is already applied in db/migrations.ts), in-memory otherwise. Both
