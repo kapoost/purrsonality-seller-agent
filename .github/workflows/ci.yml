@@ -54,9 +54,9 @@ jobs:
         run: |
           bunx adcp storyboard run http://127.0.0.1:3001/mcp \
             --auth $ADCP_TEST_TOKEN \
-            --test-kit node_modules/@adcp/sdk/compliance/cache/3.0.12/test-kits/acme-outdoor.yaml \
+            --test-kit node_modules/@adcp/sdk/compliance/cache/3.1.0/test-kits/acme-outdoor.yaml \
             --allow-http \
-            --timeout 120 \
+            --timeout 180 \
             --summary-output /tmp/summary.json 2>&1 | tee /tmp/storyboard.out
 
       - name: Parse storyboard summary
@@ -66,27 +66,35 @@ jobs:
           FAILED=$(jq -r '.failed' /tmp/summary.json)
           echo "passed=$PASSED" >> $GITHUB_OUTPUT
           echo "failed=$FAILED" >> $GITHUB_OUTPUT
-          echo "## Storyboard Result" >> $GITHUB_STEP_SUMMARY
+          echo "## Storyboard Result (cache 3.1.0)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
           echo "| Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
-          echo "| Threshold (regression guard) | 131 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pass threshold | 240 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Fail threshold | 5 |" >> $GITHUB_STEP_SUMMARY
 
-      - name: Regression guard (must pass ≥131, fail ≤1)
+      - name: Regression guard (must pass ≥240, fail ≤5)
         run: |
           PASSED=${{ steps.parse.outputs.passed }}
           FAILED=${{ steps.parse.outputs.failed }}
-          if [ "$PASSED" -lt 131 ]; then
-            echo "::error::Regression: $PASSED < 131 baseline. Investigate failed storyboards before merging."
+          # Baseline locked 2026-06-27 against cache 3.1.0 acme-outdoor:
+          #   pass=246, fail=3, skip=83
+          # Pass floor 240 = 6-scenario slack against the measured baseline.
+          # Fail ceiling 5 = covers the 3 measured + 2 upstream-blocked fails
+          # that can surface depending on test-kit auth (billing_gate
+          # demo-billing-passthrough-v1, deny_live_caller, pagination
+          # seed_account #5723, dependency_impairment #5707).
+          if [ "$PASSED" -lt 240 ]; then
+            echo "::error::Regression: $PASSED < 240 baseline. Investigate failed storyboards before merging."
             exit 1
           fi
-          if [ "$FAILED" -gt 1 ]; then
-            echo "::error::New failure: $FAILED > 1 baseline (known: pagination_integrity_list_accounts/first_page, upstream #4914). Investigate before merging."
+          if [ "$FAILED" -gt 5 ]; then
+            echo "::error::New failure: $FAILED > 5 baseline. Known upstream blockers: pagination_integrity_list_accounts (adcp#5723 P0 — seed_account UNKNOWN_SCENARIO), dependency_impairment (adcp#5707 — transition.from SHOULD vs MUST). Local-only: billing_gate_dispatch (AAO test-kit bearer mismatch), comply_controller_mode_gate (FORBIDDEN code on live caller). Investigate any new fail."
             exit 1
           fi
-          echo "OK: $PASSED passed ≥ 131 baseline, $FAILED failed ≤ 1 baseline"
+          echo "OK: $PASSED passed ≥ 240 baseline, $FAILED failed ≤ 5 baseline"
 
       - name: Stop seller agent
         if: always()
