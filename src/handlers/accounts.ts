@@ -122,12 +122,19 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
     return refs.map((ref, i) => {
       const wire = wireBody?.[i];
       const refAny = ref as { brand?: unknown; operator?: string; account_id?: string };
+      // First-call vs settings-update: AAO comply distinguishes via `action`.
+      // No account_id on the request = create flow (sandbox provisioning),
+      // explicit account_id = settings-update on an existing account. Echoing
+      // 'unchanged' on a create looks to the runner like the seller refused
+      // to persist; downstream notification_config_lifecycle phases then
+      // cascade as `state never materialized`.
+      const action: 'created' | 'updated' = refAny.account_id ? 'updated' : 'created';
       return {
         account_id: refAny.account_id ?? account.id,
         brand: refAny.brand as never,
         operator: refAny.operator ?? '',
         name: account.name,
-        action: 'unchanged' as const,
+        action,
         status: 'active' as const,
         ...(wire?.billing && { billing: wire.billing as never }),
         ...(wire?.payment_terms && { payment_terms: wire.payment_terms as never }),
