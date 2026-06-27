@@ -140,10 +140,25 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
       } as unknown as Account<PurrAccountMeta>;
     });
     const items = [primaryWithConfigs, ...sandbox];
-    // Filter to sandbox-only when the wire request carried sandbox: true
-    // (pagination_integrity_list_accounts/first_page sends `sandbox: true`).
-    const filterAny = filter as { sandbox?: boolean } | undefined;
-    const filtered = filterAny?.sandbox === true ? sandbox : items;
+    const filterAny = filter as { sandbox?: boolean; account?: { account_id?: string } } | undefined;
+    let filtered = items;
+    // `sandbox: true` → keep only mode==='sandbox' rows (primary is already
+    // in sandbox mode for sandbox principals). Previously this only returned
+    // seeded accounts, which excluded the primary even when its mode matched.
+    // notification_config_lifecycle's list_accounts step gates on the primary
+    // being returned.
+    if (filterAny?.sandbox === true) {
+      filtered = filtered.filter((a) => (a as { mode?: string }).mode === 'sandbox');
+    }
+    // Account-id filter: storyboard's list_accounts often targets a specific
+    // account_id captured from a previous sync_accounts step. Without this,
+    // the notification_config_lifecycle list step received the full list and
+    // the field_value assertion on accounts[0].account_id failed when the
+    // primary singleton wasn't the targeted ID.
+    const targetAccountId = filterAny?.account?.account_id;
+    if (typeof targetAccountId === 'string') {
+      filtered = filtered.filter((a) => a.id === targetAccountId);
+    }
     return { items: filtered };
   },
   // sync_accounts surface — 3.1 measurement_accountability + delivery_reporting
