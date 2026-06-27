@@ -112,18 +112,29 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
   // and echo them verbatim on the per-account row.
   upsert: async (refs, ctx) => {
     const account = accountForPrincipal(ctx?.authInfo?.clientId);
-    const wireBody = ((ctx as unknown as { input?: { accounts?: Array<{ notification_configs?: unknown }> } } | undefined)?.input)?.accounts;
-    return {
-      accounts: refs.map((_ref, i) => {
-        const notification_configs = wireBody?.[i]?.notification_configs;
-        return {
-          account: account as never,
-          action: 'unchanged' as const,
-          ...(Array.isArray(notification_configs) && notification_configs.length > 0 && {
-            notification_configs: notification_configs as never,
-          }),
-        };
-      }),
-    } as never;
+    const wireBody = ((ctx as unknown as { input?: { accounts?: Array<{ notification_configs?: unknown; billing?: string; payment_terms?: string }> } } | undefined)?.input)?.accounts;
+    // SyncAccountsHandlerResult is `SyncAccountsResultRow[]` — flat rows, not
+    // `{ accounts: [...] }`. Earlier wrapper shape only ever ran when every
+    // sync_accounts request was rejected upstream by BILLING_NOT_SUPPORTED;
+    // once `supportedBillings` was widened to accept `operator`, the wrong
+    // shape started reaching toWireSyncAccountRow and producing
+    // SERVICE_UNAVAILABLE.
+    return refs.map((ref, i) => {
+      const wire = wireBody?.[i];
+      const refAny = ref as { brand?: unknown; operator?: string; account_id?: string };
+      return {
+        account_id: refAny.account_id ?? account.id,
+        brand: refAny.brand as never,
+        operator: refAny.operator ?? '',
+        name: account.name,
+        action: 'unchanged' as const,
+        status: 'active' as const,
+        ...(wire?.billing && { billing: wire.billing as never }),
+        ...(wire?.payment_terms && { payment_terms: wire.payment_terms as never }),
+        ...(Array.isArray(wire?.notification_configs) && wire.notification_configs.length > 0 && {
+          notification_configs: wire.notification_configs as never,
+        }),
+      };
+    }) as never;
   },
 };
