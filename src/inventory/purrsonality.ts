@@ -1300,9 +1300,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       reporting_period: { start: periodStart, end: periodEnd },
       currency: resolvedCurrency,
       aggregated_totals: {
-        impressions: aggImpressions,
-        spend: aggSpend,
-        clicks: aggClicks,
+        // Schema enforces `minimum: 0` on these aggregates. Clamp at the
+        // emission edge: 3.1 storyboards fail get_delivery on any negative
+        // total even when the underlying per-buy values are also clamped,
+        // because float arithmetic across many small simulator-derived
+        // numbers can land on a tiny negative residue after rounding.
+        impressions: Math.max(0, aggImpressions),
+        spend: Math.max(0, aggSpend),
+        clicks: Math.max(0, aggClicks),
         media_buy_count: deliveries.length,
       },
       media_buy_deliveries: deliveries,

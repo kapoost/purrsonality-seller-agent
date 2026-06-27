@@ -24,6 +24,14 @@ export const platform = definePlatform<null, PurrAccountMeta>({
     specialisms: ['sales-non-guaranteed'] as const,
     channels: ['display'] as const,
     pricingModels: ['cpm'] as const,
+    // Accept both `agent` and `operator` billing on sync_accounts. AAO comply
+    // suite (notification_config_lifecycle, …) seeds accounts via the
+    // acme-outdoor test-kit with `billing: "operator"`. Defaulting to
+    // ['agent'] only made the runner mark sync_accounts as
+    // BILLING_NOT_SUPPORTED, which cascaded `not_applicable` onto every
+    // dependent storyboard. Both billing modes route to the same sandbox
+    // account on this single-publisher reference impl.
+    supportedBillings: ['agent', 'operator'] as const,
     config: null,
     // Advertise release-precision AdCP versions we speak. Slot landed in
     // SDK 9.0.0 via PR #2201 closing #2199. AAO comply runner gates
