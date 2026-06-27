@@ -51,7 +51,17 @@ export interface EmitOpts {
   createdAt?: string; // ISO 8601 UTC; defaults to now
 }
 
-const DEFAULT_TIMEOUT_MS = 200;
+// Hot-path budget. 200ms was the Phase A loopback assumption; production
+// (HTTPS + DNS + Veles SQLite lookup across the public internet) needs
+// more headroom. 1500ms still keeps the buyer's create_media_buy call
+// well under any sane SLO and lets the in-band submit actually complete
+// (so the wire ships a confirmed proof_id, not "pending"). Override via
+// VELES_HOT_TIMEOUT_MS for adopters with tighter budgets.
+const DEFAULT_TIMEOUT_MS = (() => {
+  const env = process.env.VELES_HOT_TIMEOUT_MS;
+  const n = env ? Number.parseInt(env, 10) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 1500;
+})();
 
 /**
  * Synchronously decide whether the seller can emit. Returns false
@@ -91,16 +101,13 @@ export async function emitEvent(cfg: EmitterConfig, opts: EmitOpts): Promise<Emi
     };
   }
 
-  // Pending path — kick off a background submit that may or may not
-  // land, then ship the wire response immediately with a pending id.
-  // Pending ids are namespaced ("pending:<commit>") so verify_proof
-  // distinguishes them from confirmed ones.
-  void backgroundSubmit(cfg, {
-    agent_url: cfg.agentURL,
-    event_commitment: result.commit,
-    prev_event_hash: result.prevHash,
-    signature: result.jws,
-  }, result.commit);
+  // Pending path — kick off a background submit that retries with the
+  // generous 5s budget AND honors CHAIN_BROKEN self-recovery (the same
+  // recovery the hot path attempts). Without recovery here too, a
+  // hot-path timeout against a stale Veles head would log
+  // "background submit failed: CHAIN_BROKEN" forever — exactly what
+  // bit us in Phase A before this commit.
+  void backgroundEmit(cfg, opts, createdAt);
 
   return {
     attestor_url: cfg.velesURL,
@@ -108,6 +115,22 @@ export async function emitEvent(cfg: EmitterConfig, opts: EmitOpts): Promise<Emi
     proof_id: `veles:1:pending:${result.commit}`,
     pending: true,
   };
+}
+
+async function backgroundEmit(cfg: EmitterConfig, opts: EmitOpts, createdAt: string): Promise<void> {
+  // 5s budget — generous, no caller waiting. Same self-recovery loop
+  // as the hot path: one retry if Veles says CHAIN_BROKEN.
+  let result = await attempt(cfg, opts, createdAt, 5000);
+  if (result.kind === 'chain_broken' && result.expectedHead) {
+    await resetChainHead(cfg.agentURL, result.expectedHead);
+    result = await attempt(cfg, opts, createdAt, 5000);
+  }
+  if (result.kind === 'ok') {
+    await advanceChain(cfg.agentURL, result.commit);
+  } else {
+    console.error('[audit/emitter] background emit gave up:',
+      result.kind === 'pending' ? result.reason : `chain_broken (head=${result.expectedHead ?? 'unparsed'})`);
+  }
 }
 
 type AttemptResult =
@@ -174,23 +197,6 @@ async function submitWithTimeout(
   } catch (err: unknown) {
     const reason = err instanceof Error ? err.message : 'unknown';
     return { ok: false, reason };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function backgroundSubmit(cfg: EmitterConfig, params: SubmitParams, commit: string): Promise<void> {
-  // 5s budget on the background path — generous, since no caller is
-  // waiting. On success advance the chain so the NEXT emit picks up
-  // where this one left off; on failure leave chain alone (the next
-  // emit will retry from the prior known-good hash).
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
-  try {
-    await postSubmit(cfg, params, controller.signal);
-    await advanceChain(cfg.agentURL, commit);
-  } catch (err: unknown) {
-    console.error('[audit/emitter] background submit failed:', err);
   } finally {
     clearTimeout(timer);
   }
