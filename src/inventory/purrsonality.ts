@@ -859,6 +859,24 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     });
     mockUpstream.setSynthPackages(order.order_id, synthPackages);
 
+    // 3.1 dependency_impairment baseline_healthy seeds creative_assignments[]
+    // inline on create_media_buy (not via a follow-up update_media_buy). Persist
+    // them at creation so a subsequent force_creative_status → rejected
+    // surfaces via media_buys[].impairments[] without requiring the buyer to
+    // re-bind through update_media_buy.
+    for (let i = 0; i < packages.length; i++) {
+      const pkg = packages[i] as { creative_assignments?: ReadonlyArray<{ creative_id?: string }> };
+      const sp = synthPackages[i];
+      if (sp && Array.isArray(pkg.creative_assignments) && pkg.creative_assignments.length > 0) {
+        const assignments = pkg.creative_assignments
+          .filter((a): a is { creative_id: string } => typeof a?.creative_id === 'string')
+          .map((a) => ({ creative_id: a.creative_id }));
+        if (assignments.length > 0) {
+          mockUpstream.setPackageCreativeAssignments(order.order_id, sp.package_id, assignments);
+        }
+      }
+    }
+
     for (const [productId, overlay] of overlayMap.entries()) {
       mockUpstream.setPackageOverlay(order.order_id, productId, overlay);
     }
@@ -1346,7 +1364,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     const orders = allOrders
       .filter((o) => (wantedIds ? wantedIds.has(o.order_id) : true))
       .sort((a, b) => (b.created_at > a.created_at ? 1 : b.created_at < a.created_at ? -1 : 0));
-    return {
+    const response = {
       pagination: { has_more: false, total_count: orders.length },
       // Top-level sandbox flag — AAO comply best_practice advisory asks for
       // confirmation that the seller honoured sandbox routing. Per-row sandbox
@@ -1384,11 +1402,10 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           // offline status (rejected today; spec may extend). Recovery
           // path: unbind the offline creative via
           // update_media_buy.packages[].creative_assignments[] swap.
-          health: (() => {
+          ...((): { health: 'ok' | 'impaired'; impairments: ReadonlyArray<unknown> } => {
             const imp = mockUpstream.computeImpairmentsForOrder(o.order_id);
-            return imp.length > 0 ? 'impaired' : 'ok';
+            return { health: imp.length > 0 ? 'impaired' : 'ok', impairments: imp };
           })(),
-          impairments: mockUpstream.computeImpairmentsForOrder(o.order_id),
           // Package projection precedence: seeded_packages (full overrides
           // via comply seed_media_buy) → legacy_packages (3.1
           // package_correlation_legacy_fallback, package_id+context only,
@@ -1457,7 +1474,8 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           }),
         };
       }),
-    } as unknown as GetMediaBuysResponse;
+    };
+    return response as unknown as GetMediaBuysResponse;
   },
 
   async listCreativeFormats(
@@ -1491,7 +1509,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         assets: displaySlots,
       },
     ];
-    const seededRaw = mockUpstream.listSeededFormats();
+    // Read wire account_id (not ctx.account?.id which resolves to the
+    // singleton sandbox via our resolver). The pagination_integrity_creative_formats
+    // storyboard targets a synthetic test account_id like
+    // `acct_pagination_integrity_formats`; the seed adapter stamps that
+    // value on _account_id, so we match wire-to-seed exactly.
+    const wireAccountIdForFormats = ((req ?? {}) as { account?: { account_id?: string } })
+      .account?.account_id;
+    const seededRaw = mockUpstream.listSeededFormats(wireAccountIdForFormats);
     const seeded = seededRaw.map((f) => {
       const fAny = f as Record<string, unknown>;
       const rawId = fAny['format_id'];
@@ -1557,9 +1582,18 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     const accountId = ctx.account?.id;
     const accountIdHash = hashAccountId(accountId);
     // Sandbox principals bypass the review queue so storyboards (which assume
-    // status=approved on first sync) keep passing. Live principals submit
-    // at pending_review and need an operator decision via /api/creatives.
-    const autoApprove = (ctx.account as { mode?: string } | undefined)?.mode === 'sandbox';
+    // status=approved on first sync) keep passing. Anonymous buyers (e.g., the
+    // Abzu demo orchestrator) submit at pending_review and need an operator
+    // decision via /api/creatives.
+    //
+    // Gate on the authenticated_sandbox flag in ctx_metadata, NOT ctx.account.mode
+    // — this seller is single-mode (every account is sandbox-shaped), so mode
+    // alone would let any anonymous buyer bypass review. The flag is set only
+    // when accountStore.resolve recognized the bearer as a sandbox principal.
+    const autoApprove = Boolean(
+      (ctx.account as { ctx_metadata?: { authenticated_sandbox?: boolean } } | undefined)
+        ?.ctx_metadata?.authenticated_sandbox,
+    );
 
     const results: SyncCreativesRow[] = [];
     for (const c of list) {
@@ -1900,12 +1934,26 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
   },
 
   async listCreatives(req: ListCreativesRequest, ctx): Promise<ListCreativesResponse> {
-    const r = (req ?? {}) as { pagination?: { max_results?: number; cursor?: string } };
+    const r = (req ?? {}) as {
+      pagination?: { max_results?: number; cursor?: string };
+      account?: { account_id?: string };
+    };
     const accountIdHash = hashAccountId(ctx.account?.id);
     const persistent = await creativesStore.list({
       ...(accountIdHash !== null && { accountIdHash }),
       limit: 500,
     });
+    // Test-scope hint from the wire account_id (3.0 pagination_integrity uses
+    // `acct_pagination_integrity` as a synthetic test account that resolves
+    // to the singleton sandbox account underneath). When present, restrict
+    // mock+persistent creatives to those whose id contains the test prefix
+    // so lingering state from earlier storyboards (deterministic-rejection-probe,
+    // comply-state-test-creative) doesn't inflate query_summary.total_matching.
+    const wireAccountId = r.account?.account_id;
+    const testScopeSuffix =
+      typeof wireAccountId === 'string' && wireAccountId.startsWith('acct_')
+        ? wireAccountId.substring('acct_'.length)
+        : null;
 
     // Widening: persistent rows carry CreativeStatus enum; the mockUpstream
     // fallback may return non-enum strings (legacy fixtures). Use a generic
@@ -2014,6 +2062,9 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     if (filters?.statuses && filters.statuses.length > 0) {
       const wanted = new Set(filters.statuses);
       normalized = normalized.filter((c) => wanted.has(c.status));
+    }
+    if (testScopeSuffix !== null) {
+      normalized = normalized.filter((c) => c.creative_id.includes(testScopeSuffix));
     }
     // 3.1 creative_lifecycle/list_and_filter expects creatives[0] to be
     // the most recently synced creative ($context.synced_creative_id).

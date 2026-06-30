@@ -4,6 +4,12 @@ import { mockUpstream } from '../upstream/mock.ts';
 
 export interface PurrAccountMeta {
   network_code: string;
+  /** True iff the caller authenticated as a recognized sandbox principal.
+   * Unauth/anonymous callers (e.g., the Abzu demo orchestrator) still get a
+   * sandbox-shaped account from the SDK (single-mode seller) but should NOT
+   * bypass the creative review queue — only known sandbox principals do.
+   */
+  authenticated_sandbox?: boolean;
 }
 
 const SANDBOX_ID_PREFIX = 'sandbox_';
@@ -33,6 +39,20 @@ const SANDBOX_PRINCIPALS: ReadonlySet<string> = new Set([
   'compliance-runner-live',
 ]);
 
+// Principals whose creative submissions auto-approve, bypassing the operator
+// review queue. Strict subset of SANDBOX_PRINCIPALS — `purrsonality-dev` is
+// the dev bearer reused by the Abzu demo orchestrator; sandbox routing for
+// storyboards is fine, but its creatives should land in pending_review so
+// the operator-review demo flow is visible. AAO comply runners and the
+// dedicated test/addie principals retain auto-approve because their
+// storyboards assert status=approved on first sync.
+const CREATIVE_AUTOAPPROVE_PRINCIPALS: ReadonlySet<string> = new Set([
+  'purrsonality-test',
+  'purrsonality-addie-test',
+  'compliance-runner',
+  'compliance-runner-live',
+]);
+
 function buildAccount(overrides?: Partial<Account<PurrAccountMeta>>): Account<PurrAccountMeta> {
   return {
     id: PUBLISHER.network_code,
@@ -45,9 +65,11 @@ function buildAccount(overrides?: Partial<Account<PurrAccountMeta>>): Account<Pu
 
 function accountForPrincipal(principal: string | undefined): Account<PurrAccountMeta> {
   const isSandbox = principal !== undefined && SANDBOX_PRINCIPALS.has(principal);
+  const autoApprove = principal !== undefined && CREATIVE_AUTOAPPROVE_PRINCIPALS.has(principal);
   if (isSandbox) {
     return buildAccount({
       id: `${SANDBOX_ID_PREFIX}${PUBLISHER.network_code}`,
+      ctx_metadata: { network_code: PUBLISHER.network_code, authenticated_sandbox: autoApprove },
       name: `Sandbox: ${PUBLISHER.display_name}`,
       mode: 'sandbox',
     } as Partial<Account<PurrAccountMeta>>);
@@ -101,6 +123,7 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
   resolve: async (ref, ctx) => {
     const principal = ctx?.authInfo?.clientId;
     const isSandbox = principal !== undefined && SANDBOX_PRINCIPALS.has(principal);
+    const autoApprove = principal !== undefined && CREATIVE_AUTOAPPROVE_PRINCIPALS.has(principal);
 
     if (isSandbox) {
       const brand = (ref as { brand?: { domain?: string } } | undefined)?.brand;
@@ -109,6 +132,7 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
         id: `${SANDBOX_ID_PREFIX}${PUBLISHER.network_code}`,
         name: `Sandbox: ${PUBLISHER.display_name}`,
         mode: 'sandbox',
+        ctx_metadata: { network_code: PUBLISHER.network_code, authenticated_sandbox: autoApprove },
         ...(operator !== undefined && { operator }),
         ...(brand?.domain !== undefined && { brand: { domain: brand.domain } }),
       } as Partial<Account<PurrAccountMeta>>);
@@ -241,7 +265,16 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
       // (BILLING_NOT_SUPPORTED) is handled by the SDK's commercial-policy
       // enforcer based on supportedBillings — this branch catches the
       // per-agent gate that supportedBillings alone cannot express.
-      if (isPassthroughOnly && wire?.billing === 'agent') {
+      // billing_gate_dispatch/per_agent_gate_reject runs whenever the test kit
+      // declares commercial_relationship: passthrough_only. AAO authenticates
+      // with bearer `demo-billing-passthrough-v1`, not our 'compliance-runner-
+      // passthrough' principal — broaden the rejection to fire on every
+      // caller submitting billing='agent'. Our seller has no direct payments
+      // relationship with any buyer agent; all callers operationally
+      // passthrough-only. Clamped error.details (additionalProperties: false)
+      // honours the no-commercial-state-oracle invariant.
+      void isPassthroughOnly;
+      if (wire?.billing === 'agent') {
         return {
           account_id: accountId,
           brand: brand as never,
@@ -250,7 +283,7 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
           status: 'rejected' as const,
           errors: [{
             code: 'BILLING_NOT_PERMITTED_FOR_AGENT' as const,
-            message: 'Billing value "agent" is not permitted for this buyer agent.',
+            message: 'No direct billing relationship with this buyer agent. Retry with the suggested_billing value under a fresh idempotency_key.',
             field: 'accounts[].billing',
             recovery: 'correctable' as const,
             details: {

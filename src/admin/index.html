@@ -464,6 +464,7 @@ function renderCreatives(rows, opts) {
     tbody.innerHTML = `<tr><td colspan="${colspan}" class="empty">${opts.emptyText ?? 'no creatives'}</td></tr>`;
     return;
   }
+  const pickUrl = (v) => (typeof v === 'string' ? v : (v && typeof v === 'object' && typeof v.url === 'string' ? v.url : null));
   tbody.innerHTML = rows.map((r, idx) => {
     const ts = new Date(r.submitted_at).toLocaleString();
     const fmt = (r.format_id && r.format_id.id) ? r.format_id.id : '—';
@@ -473,9 +474,13 @@ function renderCreatives(rows, opts) {
                       : r.status === 'pending_review' ? 'var(--warn)' : 'var(--muted)';
     const note = r.review_note ? escapeHtml(r.review_note) : '—';
     const lastCol = opts.lastColRender(r);
+    const thumbUrl = pickUrl(r.assets?.image);
+    const thumb = thumbUrl
+      ? `<img src="${escapeHtml(thumbUrl)}" alt="" style="width: 40px; height: 30px; object-fit: contain; vertical-align: middle; margin-right: 6px; border: 1px solid var(--border); background: #fff;" onerror="this.style.display='none';">`
+      : '';
     return `<tr class="${opts.idPrefix}-row" data-row-idx="${idx}" style="cursor: pointer;">
       <td style="font-size: 11px;"><span class="${opts.idPrefix}-toggle" style="color: var(--muted); font-size: 10px; margin-right: 4px;">▸</span>${escapeHtml(ts)}</td>
-      <td style="font-family: Menlo, monospace; font-size: 11px;">${escapeHtml(r.creative_id)}</td>
+      <td style="font-family: Menlo, monospace; font-size: 11px;">${thumb}${escapeHtml(r.creative_id)}</td>
       <td style="font-size: 11px;">${escapeHtml(fmt)}</td>
       <td style="font-family: Menlo, monospace; font-size: 11px;">${escapeHtml(acct)}</td>
       <td style="color: ${statusColor}; font-weight: 600; font-size: 11px;">${escapeHtml(r.status)}</td>
