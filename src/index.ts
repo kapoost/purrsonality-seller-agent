@@ -14,6 +14,7 @@ import { platform } from './platform.ts';
 // signedRequests verifier was removed when we dropped the
 // signed-requests specialism declaration; the keys + capability
 // signalling stay so opt-in signing buyers can still discover us.
+import { seedDemoCreative } from './seed/demo-creative.ts';
 import { idempotencyStore, mediaBuyStore, stateStore, taskRegistry, wipePersistentTestState } from './stores/index.ts';
 import { buildAdcpCapabilities, buildOAuthProtectedResource } from './well-known/adcp-capabilities.ts';
 import { buildAgentCard } from './well-known/agent-card.ts';
@@ -31,6 +32,10 @@ await runMigrations();
 const wipe = await wipePersistentTestState();
 if (wipe.tables_cleared.length > 0) {
   console.log('[startup] wiped persistent comply tables:', wipe.tables_cleared.join(', '));
+}
+const seed = await seedDemoCreative();
+if (seed.seeded) {
+  console.log('[startup] seeded demo creative for /live/result-slot');
 }
 startMetricsFlusher();
 startHeartbeat();
