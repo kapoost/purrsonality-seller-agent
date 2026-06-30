@@ -31,6 +31,10 @@ interface ProxyOptions {
   agentCard: Record<string, unknown>;
   adcpCapabilities: Record<string, unknown>;
   oauthProtectedResource: Record<string, unknown>;
+  /** Bearer accepted on /api/creatives — same token operators use against the
+   * internal admin port. Re-exposing the endpoints on the public port so the
+   * Abzu GUI's Operator tab can proxy to them without an SSH tunnel. */
+  reviewAuthToken: string;
 }
 
 let server: ReturnType<typeof Bun.serve> | null = null;
@@ -136,6 +140,99 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           { ok: true, uptime_ms: Date.now() - startedAt },
           { headers: { 'Cache-Control': 'no-store' } },
         );
+      }
+
+      // ── Creative review API (public-port mirror of admin server) ──────
+      // Mirrors GET /api/creatives and POST /api/creatives/<id>/{approve,reject}
+      // from src/admin/server.ts onto the public port so an external operator
+      // panel (Abzu GUI's Operator tab) can reach them without an SSH tunnel.
+      // Bearer auth is the same ADCP_AUTH_TOKEN used by the admin server.
+      if (url.pathname === '/api/creatives' || url.pathname.startsWith('/api/creatives/')) {
+        const corsHeaders = {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'authorization, content-type',
+        };
+        if (req.method === 'OPTIONS') {
+          return new Response(null, { status: 204, headers: corsHeaders });
+        }
+        const auth = req.headers.get('authorization');
+        const tokenFromQuery = url.searchParams.get('token');
+        const provided = auth?.startsWith('Bearer ') ? auth.slice(7) : tokenFromQuery;
+        if (provided !== opts.reviewAuthToken) {
+          return Response.json({ error: 'unauthorized' }, { status: 401, headers: corsHeaders });
+        }
+
+        if (url.pathname === '/api/creatives' && req.method === 'GET') {
+          const statusParam = url.searchParams.get('status') ?? undefined;
+          const validStatuses = ['processing', 'pending_review', 'approved', 'rejected', 'archived'] as const;
+          const status = (validStatuses as readonly string[]).includes(statusParam ?? '')
+            ? (statusParam as (typeof validStatuses)[number])
+            : undefined;
+          const limitStr = url.searchParams.get('limit');
+          const limit = limitStr ? Math.min(500, Number.parseInt(limitStr, 10)) : 100;
+          try {
+            const rows = await creativesStore.list({
+              ...(status && { status }),
+              limit,
+            });
+            const stats = await impressionsStore.statsForCreatives(
+              rows.map((r) => r.creative_id),
+            );
+            const enriched = rows.map((r) => ({
+              ...r,
+              stats: stats[r.creative_id] ?? { impressions: 0, clicks: 0, last_at: null },
+            }));
+            return Response.json({ creatives: enriched }, { headers: corsHeaders });
+          } catch (err) {
+            return Response.json(
+              { error: 'query_failed', message: (err as Error).message?.slice(0, 200) },
+              { status: 500, headers: corsHeaders },
+            );
+          }
+        }
+
+        const match = url.pathname.match(/^\/api\/creatives\/([^/]+)\/(approve|reject)$/);
+        if (match && req.method === 'POST') {
+          const creativeId = decodeURIComponent(match[1]!);
+          const action = match[2] as 'approve' | 'reject';
+          let body: { note?: string } = {};
+          try {
+            const raw = await req.text();
+            if (raw) body = JSON.parse(raw);
+          } catch {
+            return Response.json({ error: 'invalid_json' }, { status: 400, headers: corsHeaders });
+          }
+          const note = typeof body.note === 'string' ? body.note.slice(0, 500) : null;
+          if (action === 'reject' && !note) {
+            return Response.json(
+              { error: 'note_required', message: 'reject must include a non-empty note' },
+              { status: 400, headers: corsHeaders },
+            );
+          }
+          try {
+            const updated = await creativesStore.setStatus(
+              creativeId,
+              action === 'approve' ? 'approved' : 'rejected',
+              note,
+            );
+            if (!updated) {
+              return Response.json(
+                { error: 'not_found', creative_id: creativeId },
+                { status: 404, headers: corsHeaders },
+              );
+            }
+            log.info('creative_review', { creative_id: creativeId, action, has_note: note !== null });
+            return Response.json({ creative: updated }, { headers: corsHeaders });
+          } catch (err) {
+            return Response.json(
+              { error: 'update_failed', message: (err as Error).message?.slice(0, 200) },
+              { status: 500, headers: corsHeaders },
+            );
+          }
+        }
+
+        return Response.json({ error: 'not_found' }, { status: 404, headers: corsHeaders });
       }
 
       // ── Demo ad-server routes (Phase A) ────────────────────────────────

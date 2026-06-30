@@ -131,6 +131,7 @@ serve(
       startWellKnownProxy({
         publicPort: env.PORT,
         sdkPort,
+        reviewAuthToken: env.ADCP_AUTH_TOKEN,
         agentCard: buildAgentCard({ agentUrl, version: '0.0.1' }),
         adcpCapabilities: buildAdcpCapabilities({
           agentUrl,
