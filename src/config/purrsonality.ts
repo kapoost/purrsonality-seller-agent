@@ -139,6 +139,29 @@ export interface PurrProductConfig {
 
 export const PRODUCTS: readonly PurrProductConfig[] = [
   {
+    product_id: 'purr_landing_leaderboard_v1',
+    name: 'Purrsonality landing page slot',
+    description: 'Above-the-fold leaderboard on the Purrsonality landing page. Highest-reach placement — every quiz-taker sees it before they engage. Broad cat-owner audience with pre-engagement intent (looking for a quiz).',
+    network_code: 'purrsonality',
+    channel: 'display',
+    format_ids: ['display_728x90', 'display_responsive'],
+    ad_unit_ids: ['purrsonality/landing_page'],
+    min_cpm: 1.0,
+    currency: 'USD',
+    min_spend: 100,
+    estimated_impressions_per_month: 250_000,
+    measurement_terms: {
+      billing_measurement: {
+        vendor: { domain: 'attentionvendor.example' },
+        max_variance_percent: 10,
+        measurement_window: 'post_sivt',
+      },
+      makegood_policy: {
+        available_remedies: ['additional_delivery', 'credit'],
+      },
+    },
+  },
+  {
     product_id: 'purr_result_card_v1',
     name: 'Purrsonality result page slot',
     description: 'Display ad on the result page directly after a user completes the cat-personality quiz. High-context, post-engagement placement with strong cat-owner intent.',
@@ -175,6 +198,7 @@ export const PRODUCTS: readonly PurrProductConfig[] = [
 
 export const FORMATS = [
   { format_id: 'display_300x250',  name: 'Medium rectangle',       width: 300, height: 250 },
+  { format_id: 'display_728x90',   name: 'Leaderboard',            width: 728, height: 90  },
   { format_id: 'display_responsive', name: 'Responsive display', width: 0,   height: 0   },
 ] as const;
 

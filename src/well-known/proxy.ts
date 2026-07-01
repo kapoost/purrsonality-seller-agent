@@ -305,21 +305,47 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
         });
       }
 
-      // ── Phase B: live slot for purrsonality.rocketscience.pl ─────────
-      // Real-user serve endpoint embedded as an iframe on the quiz result
-      // page (see cats/src/components/AdSlot.astro). Picks the latest
-      // approved creative — operator's last Approve action automatically
-      // becomes the live banner.
-      //
-      // Differs from /preview by:
-      //   - frame-ancestors CSP allows both prod (rocketscience.pl) and dev (pages.dev) embeds
-      //   - HTML is minimal (no chrome / metadata), pure banner
-      //   - impression event records media_buy_id='live-result-slot'
-      //   - falls back to generic house campaign when no AdCP creative
-      //     approved yet (labeled "generic campaign" vs "AdCP protocol")
-      if (req.method === 'GET' && url.pathname === '/live/result-slot') {
-        const approved = await creativesStore.list({ status: 'approved', limit: 1 });
-        const creative = approved[0] ?? null;
+      // ── Phase B: live slots for purrsonality.rocketscience.pl ────────
+      // Real-user serve endpoints embedded as iframes on the site (see
+      // cats/src/components/AdSlot.astro). Two placements:
+      //   /live/landing-slot  → purr_landing_leaderboard_v1 (728x90)
+      //   /live/result-slot   → purr_result_card_v1 (300x250)
+      // Each picks the latest approved creative bound to a buy of the
+      // matching product; falls back to a house-generic banner when no
+      // AdCP creative is live for that placement. Badge distinguishes
+      // "AdCP protocol" (violet) from "generic campaign" (grey).
+      const liveSlotMatch = req.method === 'GET'
+        && url.pathname.match(/^\/live\/(landing|result)-slot$/);
+      if (liveSlotMatch) {
+        const placement = liveSlotMatch[1] as 'landing' | 'result';
+        const productId = placement === 'landing'
+          ? 'purr_landing_leaderboard_v1'
+          : 'purr_result_card_v1';
+        const fallbackMediaBuyId = `live-${placement}-slot`;
+
+        // Pull recent approved creatives and pick the first one whose
+        // assigned order references this placement's product. Without the
+        // filter both slots would serve the same creative — a buy on the
+        // result card would leak onto the landing leaderboard, and vice
+        // versa. Order-less approved creatives (house seeds, dev uploads)
+        // are eligible for either slot as fallback.
+        const approved = await creativesStore.list({ status: 'approved', limit: 25 });
+        let creative: (typeof approved)[number] | null = null;
+        let attributedOrderId: string | null = null;
+        let fallbackCreative: (typeof approved)[number] | null = null;
+        for (const c of approved) {
+          const order = mockUpstream.findOrderByCreativeId(c.creative_id);
+          if (!order) {
+            fallbackCreative ??= c;
+            continue;
+          }
+          if (order.product_ids.includes(productId)) {
+            creative = c;
+            attributedOrderId = order.order_id;
+            break;
+          }
+        }
+        creative = creative ?? fallbackCreative;
 
         const isAdcp = creative != null;
         const badgeLabel = isAdcp ? 'AdCP protocol' : 'generic campaign';
@@ -338,25 +364,16 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
             creative.name ??
             creative.creative_id ??
             '';
-          clickHref = `/click/live-result-slot?creative_id=${encodeURIComponent(creative.creative_id)}`;
+          clickHref = `/click/live-${placement}-slot?creative_id=${encodeURIComponent(creative.creative_id)}`;
           creativeIdForLog = creative.creative_id;
         } else {
           imageUrl = 'https://purrsonality.pages.dev/og/default.png';
           altText = 'Purrsonality — discover your cat persona';
           clickHref = 'https://purrsonality.rocketscience.pl/';
-          creativeIdForLog = 'house-generic';
+          creativeIdForLog = `house-generic-${placement}`;
         }
 
-        // Attribute the impression to the media_buy this creative was
-        // assigned to (via update_media_buy → package_creative_assignments).
-        // Without this lookup all impressions bucket under 'live-result-slot'
-        // and getMediaBuyDelivery(media_buy_ids=[mb_...]) returns zero even
-        // when the slot is serving that buy's creative. Falls back to the
-        // slot-scoped id for house/seed creatives with no order attached.
-        const attributedOrder = creative
-          ? mockUpstream.findOrderByCreativeId(creative.creative_id)
-          : null;
-        const attributedMediaBuyId = attributedOrder?.order_id ?? 'live-result-slot';
+        const attributedMediaBuyId = attributedOrderId ?? fallbackMediaBuyId;
         await impressionsStore.record({
           media_buy_id: attributedMediaBuyId,
           creative_id: creativeIdForLog,
