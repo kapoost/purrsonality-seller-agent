@@ -307,6 +307,10 @@ export const mockUpstream = {
   listCreatives(accountId?: string): Array<Record<string, unknown>> {
     const all = [...seededCreatives.values()].reverse();
     if (!accountId) return all;
+    // Permissive scope: include unowned seeds (singleton seller's default
+    // catalog) plus account-owned. Test-specific narrowing (e.g.
+    // pagination_integrity filtering by creative_id prefix) happens in the
+    // listCreatives handler via wire account_id, not here.
     return all.filter((c) => {
       const owner = c['_account_id'];
       return owner === undefined || owner === accountId;
@@ -321,12 +325,18 @@ export const mockUpstream = {
     return [...seededAccounts.values()];
   },
 
-  seedCreativeFormat(id: string, fixture: Record<string, unknown>): void {
-    seededFormats.set(id, { ...fixture, format_id: id });
+  seedCreativeFormat(id: string, fixture: Record<string, unknown>, accountId?: string): void {
+    seededFormats.set(id, { ...fixture, format_id: id, _account_id: accountId });
   },
 
-  listSeededFormats(): Array<Record<string, unknown>> {
-    return [...seededFormats.values()];
+  listSeededFormats(accountId?: string): Array<Record<string, unknown>> {
+    const all = [...seededFormats.values()];
+    if (!accountId) return all;
+    // Strict account scoping when caller is account-bound, matching the
+    // creatives policy. pagination_integrity_creative_formats seeds 2 formats
+    // under a dedicated account and asserts total_count=2 — leaks from other
+    // storyboards' format seeds (or built-ins) would break the assertion.
+    return all.filter((f) => f['_account_id'] === accountId);
   },
 
   setCreateMediaBuyDirective(accountId: string, directive: CreateMediaBuyDirective): void {
@@ -492,6 +502,24 @@ export const mockUpstream = {
   ): ReadonlyArray<{ creative_id: string }> {
     const o = orders.get(orderId);
     return o?.package_creative_assignments?.[packageId] ?? [];
+  },
+
+  /* Reverse lookup: given a creative_id, find the order it's assigned to.
+   * Used by /live/result-slot to attribute the impression to the right
+   * media_buy so getMediaBuyDelivery(media_buy_ids=[X]) actually returns
+   * non-zero stats. Returns the first match — a creative attached to
+   * multiple concurrent buys is out-of-scope for this demo path. */
+  findOrderByCreativeId(creativeId: string): MockOrder | null {
+    for (const o of orders.values()) {
+      const assignments = o.package_creative_assignments;
+      if (!assignments) continue;
+      for (const pkgAssignments of Object.values(assignments)) {
+        if (pkgAssignments.some((a) => a.creative_id === creativeId)) {
+          return o;
+        }
+      }
+    }
+    return null;
   },
 
   getDelivery(orderId: string): MockDeliveryRow | null {
@@ -660,12 +688,11 @@ export const mockUpstream = {
       resource_type: 'creative' as const,
       resource_id: creativeId,
       package_ids: [...entry.packageIds],
-      // transition.from = 'approved' (the baseline state every
-      // dependency_impairment scenario forces before transitioning to
-      // rejected). Spec says SHOULD include when known; AAO runner may
-      // require it for impairment.coherence even though the schema
-      // marks it optional.
-      transition: { from: 'approved', to: entry.status },
+      // transition.from is OPTIONAL per impairment.json — emit only `to`.
+      // AAO's field_contains validator on impairments[*] does deep equality
+      // on nested objects (not subset); extra keys in `transition` would
+      // break the verify_impaired match against `{ to: "rejected" }`.
+      transition: { to: entry.status },
       // ImpairmentReasonCode enum: policy_violation | consent_expired |
       // ttl_expired | pii_audit_failed | seller_removed | content_rejected
       // | identity_authorization_revoked | identity_authorization_expired

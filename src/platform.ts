@@ -50,25 +50,15 @@ export const platform = definePlatform<null, PurrAccountMeta>({
     // We honour 3.0 (badge-eligible) AND 3.1-rc (SDK 9.x natively emits
     // the rc14 envelope shape with status / media_buy_status split).
     supported_versions: ['3.0', '3.1', '3.1-rc'] as const,
-    // Compliance testing advertisement on `get_adcp_capabilities`. Mirrors
-    // what the SDK's live `comply_test_controller.list_scenarios` probe
-    // actually returns at runtime, NOT the full set we wire in src/comply.ts.
-    //
-    // **SDK 7.11.x limitation:** the SDK's internal `advertisedScenarios()`
-    // surfaces only force_* and simulate_* adapters via `list_scenarios`,
-    // not the seed_* set, even when the seed adapters are wired in
-    // ComplyControllerConfig.seed. AAO comply runners read list_scenarios
-    // and skip storyboards whose required seed_* scenario is missing —
-    // affects ~9 universal/protocol storyboards (schema-validation,
-    // idempotency, get-media-buys-pagination, pagination-integrity,
-    // pagination-integrity-creative-formats, media-buy-seller seed phases,
-    // sales-non-guaranteed specialism). Verified by direct curl: production
-    // list_scenarios returns 6 entries (4 force + 2 simulate) regardless
-    // of this declared list.
-    //
-    // Resolution path: upgrade to @adcp/sdk 9.0+ where advertisedScenarios
-    // includes seed scenarios. Tracked under Phase 6 follow-ups in memory.
-    // Until then, keep this advertisement honest — match the live probe.
+    // Compliance testing advertisement on `get_adcp_capabilities`. SDK 9.0+
+    // emits seed_* scenarios via the live `list_scenarios` probe when the
+    // corresponding seed adapters are wired in ComplyControllerConfig.seed
+    // (see node_modules/@adcp/sdk/dist/lib/testing/comply-controller.js
+    // `advertisedScenarios()`, lines 188–205). Our seed adapters cover
+    // product, pricing_option, creative, creative_format, account, media_buy
+    // (src/comply.ts). Advertise the full surface so AAO comply runners
+    // unblock pagination_integrity, schema_validation, idempotency,
+    // get-media-buys-pagination, media-buy-seller pending_creatives phases.
     compliance_testing: {
       scenarios: [
         'force_create_media_buy_arm',
@@ -77,6 +67,12 @@ export const platform = definePlatform<null, PurrAccountMeta>({
         'force_creative_status',
         'simulate_delivery',
         'simulate_budget_spend',
+        'seed_product',
+        'seed_pricing_option',
+        'seed_creative',
+        'seed_creative_format',
+        'seed_account',
+        'seed_media_buy',
       ] as const,
     },
   },

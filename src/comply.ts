@@ -3,6 +3,7 @@ import { TestControllerError } from '@adcp/sdk/server';
 import { mockUpstream } from './upstream/mock.ts';
 import { PUBLISHER } from './config/purrsonality.ts';
 import { dropTaskRecord } from './stores/index.ts';
+import { log } from './observability/logger.ts';
 
 // `queryProvenanceAuditObservations` is an extension scenario landing in SDK
 // 9.x (adcp#2186); the 7.11.1 typed config doesn't expose it yet. We attach
@@ -232,16 +233,30 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         ...(fixture.floor_price !== undefined && { floor_price: fixture.floor_price }),
       });
     },
-    creative: async (params) => {
-      mockUpstream.seedCreative(params.creative_id, params.fixture);
+    creative: async (params, ctx) => {
+      // Scope seeded creatives to the calling account. pagination_integrity
+      // (3.0) seeds 3 creatives under account_id="acct_pagination_integrity"
+      // and then list_creatives with the SAME account_id and asserts
+      // total_matching=3. Without account scoping, prior seeds from other
+      // storyboards (deterministic-rejection-probe, comply-state-test-creative)
+      // leak into the count and break the assertion. Honour the wire-level
+      // account.account_id when present; fall back to undefined (legacy
+      // shared-namespace behaviour for storyboards that don't set account).
+      const input = ctx.input as { account?: { account_id?: string } };
+      const accountId = input.account?.account_id;
+      log.info('seed_creative invoked', {
+        creative_id: params.creative_id,
+        account_id: accountId,
+        fixture_keys: Object.keys(params.fixture ?? {}),
+      });
+      mockUpstream.seedCreative(params.creative_id, params.fixture, accountId);
     },
-    creative_format: async (params) => {
-      mockUpstream.seedCreativeFormat(params.format_id, params.fixture);
+    creative_format: async (params, ctx) => {
+      const input = ctx.input as { account?: { account_id?: string } };
+      mockUpstream.seedCreativeFormat(params.format_id, params.fixture, input.account?.account_id);
     },
     account: async (params) => {
-      // 3.1 pagination_integrity_list_accounts seeds sandbox accounts that
-      // list_accounts MUST return. Persist on mockUpstream; the accountStore
-      // list handler reads from there + the primary singleton.
+      log.info('seed_account invoked', { account_id: params.account_id });
       mockUpstream.seedAccount(params.account_id, params.fixture ?? {});
     },
     media_buy: async (params) => {
