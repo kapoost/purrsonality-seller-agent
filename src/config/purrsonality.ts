@@ -139,12 +139,12 @@ export interface PurrProductConfig {
 
 export const PRODUCTS: readonly PurrProductConfig[] = [
   {
-    product_id: 'purr_landing_leaderboard_v1',
+    product_id: 'purr_landing_rectangle_v1',
     name: 'Purrsonality landing page slot',
-    description: 'Above-the-fold leaderboard on the Purrsonality landing page. Highest-reach placement — every quiz-taker sees it before they engage. Broad cat-owner audience with pre-engagement intent (looking for a quiz).',
+    description: 'Above-the-fold medium rectangle on the Purrsonality landing page. Highest-reach placement — every quiz-taker sees it before they engage. Broad cat-owner audience with pre-engagement intent (looking for a quiz).',
     network_code: 'purrsonality',
     channel: 'display',
-    format_ids: ['display_728x90', 'display_responsive'],
+    format_ids: ['display_300x250', 'display_responsive'],
     ad_unit_ids: ['purrsonality/landing_page'],
     min_cpm: 1.0,
     currency: 'USD',

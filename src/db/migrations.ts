@@ -43,6 +43,13 @@ const CREATIVES_MIGRATION = `
   );
   CREATE INDEX IF NOT EXISTS creatives_status_submitted_idx ON creatives (status, submitted_at DESC);
   CREATE INDEX IF NOT EXISTS creatives_account_idx ON creatives (account_id_hash);
+  -- Persistent link creative→media_buy set by update_media_buy(
+  -- creative_assignments). Impression attribution reads this instead of
+  -- the in-memory mockUpstream orders map, so seller restarts don't
+  -- silently reset delivery pulls to zero for buys whose creatives are
+  -- still approved and being served.
+  ALTER TABLE creatives ADD COLUMN IF NOT EXISTS assigned_media_buy_id TEXT;
+  CREATE INDEX IF NOT EXISTS creatives_assigned_media_buy_idx ON creatives (assigned_media_buy_id);
 `;
 
 // Demo ad-server impression log — Phase A of "revive adserver" thread.

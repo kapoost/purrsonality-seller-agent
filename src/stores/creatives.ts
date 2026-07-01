@@ -31,6 +31,10 @@ export interface CreativeRow {
   submitted_at: string;
   reviewed_at: string | null;
   review_note: string | null;
+  /** Set by update_media_buy(creative_assignments). Impression attribution
+   * reads this so live-slot writes land under the caller's media_buy_id
+   * even after a seller restart (mockUpstream orders are in-memory). */
+  assigned_media_buy_id: string | null;
 }
 
 export interface SubmitInput {
@@ -74,6 +78,7 @@ function memorySubmit(input: SubmitInput): SubmitResult {
     submitted_at: existing?.submitted_at ?? now,
     reviewed_at: input.autoApprove ? now : null,
     review_note: null,
+    assigned_media_buy_id: existing?.assigned_media_buy_id ?? null,
   };
   memory.set(input.creative_id, row);
   return {
@@ -138,6 +143,7 @@ function rowFromPg(r: Record<string, unknown>): CreativeRow {
           ? (r['reviewed_at'] as Date).toISOString()
           : String(r['reviewed_at']),
     review_note: r['review_note'] == null ? null : String(r['review_note']),
+    assigned_media_buy_id: r['assigned_media_buy_id'] == null ? null : String(r['assigned_media_buy_id']),
   };
 }
 
@@ -202,7 +208,7 @@ export const creativesStore = {
     params.push(limit);
     const sql = `
       SELECT creative_id, account_id_hash, format_id, name, assets, status,
-             submitted_at, reviewed_at, review_note
+             submitted_at, reviewed_at, review_note, assigned_media_buy_id
       FROM creatives
       ${conds.length > 0 ? 'WHERE ' + conds.join(' AND ') : ''}
       ORDER BY submitted_at DESC
@@ -225,7 +231,7 @@ export const creativesStore = {
       SET status = $2, reviewed_at = NOW(), review_note = $3
       WHERE creative_id = $1
       RETURNING creative_id, account_id_hash, format_id, name, assets, status,
-                submitted_at, reviewed_at, review_note
+                submitted_at, reviewed_at, review_note, assigned_media_buy_id
     `;
     const res = await pool.query(sql, [id, status, note]);
     return res.rows[0] ? rowFromPg(res.rows[0]) : null;
@@ -237,10 +243,27 @@ export const creativesStore = {
 
     const sql = `
       SELECT creative_id, account_id_hash, format_id, name, assets, status,
-             submitted_at, reviewed_at, review_note
+             submitted_at, reviewed_at, review_note, assigned_media_buy_id
       FROM creatives WHERE creative_id = $1
     `;
     const res = await pool.query(sql, [id]);
     return res.rows[0] ? rowFromPg(res.rows[0]) : null;
+  },
+
+  /* Persist the creative→media_buy link written by update_media_buy(
+   * creative_assignments). Survives seller restarts so /live/*-slot
+   * impression writes stay attached to the caller's buy even after
+   * mockUpstream's in-memory orders vanish. */
+  async setAssignedMediaBuyId(creativeId: string, mediaBuyId: string): Promise<void> {
+    const pool = getPool();
+    if (!pool) {
+      const row = memory.get(creativeId);
+      if (row) memory.set(creativeId, { ...row, assigned_media_buy_id: mediaBuyId });
+      return;
+    }
+    await pool.query(
+      `UPDATE creatives SET assigned_media_buy_id = $2 WHERE creative_id = $1`,
+      [creativeId, mediaBuyId],
+    );
   },
 };

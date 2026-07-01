@@ -370,7 +370,7 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
       // ── Phase B: live slots for purrsonality.rocketscience.pl ────────
       // Real-user serve endpoints embedded as iframes on the site (see
       // cats/src/components/AdSlot.astro). Two placements:
-      //   /live/landing-slot  → purr_landing_leaderboard_v1 (728x90)
+      //   /live/landing-slot  → purr_landing_rectangle_v1 (300x250)
       //   /live/result-slot   → purr_result_card_v1 (300x250)
       // Each picks the latest approved creative bound to a buy of the
       // matching product; falls back to a house-generic banner when no
@@ -381,7 +381,7 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
       if (liveSlotMatch) {
         const placement = liveSlotMatch[1] as 'landing' | 'result';
         const productId = placement === 'landing'
-          ? 'purr_landing_leaderboard_v1'
+          ? 'purr_landing_rectangle_v1'
           : 'purr_result_card_v1';
         const fallbackMediaBuyId = `live-${placement}-slot`;
 
@@ -396,10 +396,15 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
         // sync_creatives (orders live in memory, creatives in Postgres,
         // so the assignment link disappears but the creative is still
         // approved with the right dimensions).
-        const placementFormatId = placement === 'landing' ? 'display_728x90' : 'display_300x250';
+        // Both placements are 300x250 rectangles — the landing product
+        // used to be a 728x90 leaderboard but overflowed the mobile-first
+        // landing layout, so we standardised on the rectangle for both.
+        // The format_id used to distinguish "which slot serves what" is
+        // now identical, so this line is retained only for parity with
+        // the earlier scan structure and any future re-differentiation.
+        const placementFormatId = 'display_300x250';
         const approved = await creativesStore.list({ status: 'approved', limit: 25 });
         let creative: (typeof approved)[number] | null = null;
-        let attributedOrderId: string | null = null;
         let formatMatchFallback: (typeof approved)[number] | null = null;
         let looseFallback: (typeof approved)[number] | null = null;
         for (const c of approved) {
@@ -408,23 +413,25 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           const order = mockUpstream.findOrderByCreativeId(c.creative_id);
           if (order?.product_ids.includes(productId)) {
             creative = c;
-            attributedOrderId = order.order_id;
             break;
           }
           if (formatOk) {
             formatMatchFallback ??= c;
-            if (order) attributedOrderId = order.order_id;
           } else if (!order) {
             looseFallback ??= c;
           }
         }
         creative = creative ?? formatMatchFallback ?? looseFallback;
-        // If we picked the format-match fallback but didn't set an order,
-        // clear attributedOrderId so impression writes under the slot-scoped
-        // fallback key instead of a stale one from the search loop.
-        if (creative && !mockUpstream.findOrderByCreativeId(creative.creative_id)) {
-          attributedOrderId = null;
-        }
+        // Attribution reads from the persistent creatives.assigned_media_
+        // buy_id column (populated by update_media_buy). Falls back to the
+        // in-memory order lookup only for legacy creatives from before the
+        // migration. Nothing here relies on mockUpstream surviving a
+        // seller restart.
+        const attributedMediaBuyId = creative
+          ? (creative.assigned_media_buy_id
+              ?? mockUpstream.findOrderByCreativeId(creative.creative_id)?.order_id
+              ?? fallbackMediaBuyId)
+          : fallbackMediaBuyId;
 
         const isAdcp = creative != null;
         const badgeLabel = isAdcp ? 'AdCP protocol' : 'generic campaign';
@@ -452,7 +459,6 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           creativeIdForLog = `house-generic-${placement}`;
         }
 
-        const attributedMediaBuyId = attributedOrderId ?? fallbackMediaBuyId;
         await impressionsStore.record({
           media_buy_id: attributedMediaBuyId,
           creative_id: creativeIdForLog,

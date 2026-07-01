@@ -1087,7 +1087,18 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       };
     }> = [];
     if (p.packages) {
-      for (const pkgPatch of p.packages) {
+      for (const pkgPatchRaw of p.packages) {
+        // Buyers (Abzu) may send buyer_ref instead of package_id when they
+        // don't track the seller-assigned identifier. Reconcile: if the buy
+        // has exactly one package, treat any patch missing package_id as
+        // targeting that single package. Multi-package buys still require
+        // package_id — there's no unambiguous match otherwise.
+        const pkgPatch: typeof pkgPatchRaw & { package_id: string } =
+          pkgPatchRaw.package_id
+            ? (pkgPatchRaw as typeof pkgPatchRaw & { package_id: string })
+            : (existing.synth_packages?.length === 1
+                ? { ...pkgPatchRaw, package_id: existing.synth_packages[0]!.package_id }
+                : (pkgPatchRaw as typeof pkgPatchRaw & { package_id: string }));
         if (!pkgPatch.package_id) continue;
         const pkgPatchAny = pkgPatch as typeof pkgPatch & {
           targeting_overlay?: {
@@ -1107,6 +1118,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
             pkgPatch.package_id,
             pkgPatch.creative_assignments!,
           );
+          // Persist the same link on the creatives table so live-slot
+          // impression attribution survives seller restarts. mockUpstream
+          // is in-memory; postgres wins on restart.
+          for (const a of pkgPatch.creative_assignments!) {
+            if (a?.creative_id) {
+              await creativesStore.setAssignedMediaBuyId(a.creative_id, buyId);
+            }
+          }
         }
 
         // Prefer synth_packages (canonical multi-package allocation table)
