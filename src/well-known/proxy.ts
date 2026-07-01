@@ -305,6 +305,68 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
         });
       }
 
+      // ── Agent-crafted creative fallback ──────────────────────────────
+      // Returned as the assets.image.url on a sync_creatives call when the
+      // buyer did not upload a bitmap. Server renders an SVG with the
+      // brand + product context so live slots have SOMETHING labeled as an
+      // AdCP creative to serve, distinct from the house-generic fallback
+      // (which fires when no AdCP creative is approved at all). Public,
+      // no auth, no impression side-effect — the impression is recorded
+      // by the /live/*-slot handler that embeds this SVG.
+      if (req.method === 'GET' && url.pathname === '/generated/agent-creative.svg') {
+        const brand = (url.searchParams.get('brand') ?? 'Advertiser').slice(0, 60);
+        const product = (url.searchParams.get('product') ?? '').slice(0, 80);
+        const sizeParam = url.searchParams.get('size') ?? '300x250';
+        const sizeMatch = sizeParam.match(/^(\d{2,4})x(\d{2,4})$/);
+        const w = sizeMatch ? Math.min(2048, Math.max(50, Number(sizeMatch[1]))) : 300;
+        const h = sizeMatch ? Math.min(2048, Math.max(30, Number(sizeMatch[2]))) : 250;
+        const brandEsc = escapeHtmlAttr(brand);
+        const productLabel = product
+          ? product.replace(/^purr_/, '').replace(/_v\d+$/i, '').replace(/_/g, ' ')
+          : 'AdCP creative';
+        const productEsc = escapeHtmlAttr(productLabel);
+        // Simple deterministic hue derived from the brand string so the
+        // banner picks a consistent color per advertiser across placements.
+        let hash = 0;
+        for (let i = 0; i < brand.length; i++) hash = (hash * 31 + brand.charCodeAt(i)) & 0xffff;
+        const hue = hash % 360;
+        const isLandscape = w / h > 3;
+        const brandFont = Math.round(Math.min(w / (brand.length * 0.55 + 2), h * (isLandscape ? 0.5 : 0.28)));
+        const productFont = Math.max(9, Math.round(brandFont * 0.35));
+        const badgeFont = Math.max(8, Math.round(brandFont * 0.25));
+        const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="${brandEsc} — ${productEsc}">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="hsl(${hue},60%,32%)"/>
+      <stop offset="100%" stop-color="hsl(${(hue + 40) % 360},60%,18%)"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.14)"/>
+      <stop offset="60%" stop-color="rgba(255,255,255,0)"/>
+    </linearGradient>
+  </defs>
+  <rect width="100%" height="100%" fill="url(#bg)"/>
+  <rect width="100%" height="100%" fill="url(#sheen)"/>
+  <g font-family="system-ui,-apple-system,'Segoe UI',sans-serif" fill="#fff">
+    <text x="50%" y="${h * 0.5}" font-size="${brandFont}" font-weight="700" text-anchor="middle" dominant-baseline="middle" letter-spacing="0.02em">${brandEsc}</text>
+    <text x="50%" y="${h * 0.5 + brandFont * 0.85}" font-size="${productFont}" fill="rgba(255,255,255,0.72)" text-anchor="middle" dominant-baseline="middle" letter-spacing="0.06em" text-transform="uppercase">${productEsc}</text>
+  </g>
+  <g transform="translate(${w - 8},${h - 8})" font-family="system-ui,-apple-system,sans-serif" text-anchor="end">
+    <rect x="${-badgeFont * 8}" y="${-badgeFont * 1.6}" width="${badgeFont * 8}" height="${badgeFont * 1.6}" rx="3" fill="rgba(0,0,0,0.35)"/>
+    <text x="${-badgeFont * 0.4}" y="${-badgeFont * 0.4}" font-size="${badgeFont}" fill="rgba(255,255,255,0.85)" letter-spacing="0.08em">AGENT-CRAFTED</text>
+  </g>
+</svg>`;
+        return new Response(svg, {
+          status: 200,
+          headers: {
+            'Content-Type': 'image/svg+xml; charset=utf-8',
+            'Cache-Control': 'public, max-age=300',
+            'Access-Control-Allow-Origin': '*',
+          },
+        });
+      }
+
       // ── Phase B: live slots for purrsonality.rocketscience.pl ────────
       // Real-user serve endpoints embedded as iframes on the site (see
       // cats/src/components/AdSlot.astro). Two placements:
@@ -323,29 +385,46 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           : 'purr_result_card_v1';
         const fallbackMediaBuyId = `live-${placement}-slot`;
 
-        // Pull recent approved creatives and pick the first one whose
-        // assigned order references this placement's product. Without the
-        // filter both slots would serve the same creative — a buy on the
-        // result card would leak onto the landing leaderboard, and vice
-        // versa. Order-less approved creatives (house seeds, dev uploads)
-        // are eligible for either slot as fallback.
+        // Placement's declared format determines which creatives fit this
+        // slot. Also try to find the matching media_buy for attribution.
+        // Selection order:
+        //   1) order-linked + product_id matches      → best (buy served)
+        //   2) format_id matches this placement       → still correct dim
+        //   3) order-linked to something else, wrong format → skip
+        //   4) format-agnostic order-less approved    → last-resort fallback
+        // Case 2 covers the demo path where the seller was restarted after
+        // sync_creatives (orders live in memory, creatives in Postgres,
+        // so the assignment link disappears but the creative is still
+        // approved with the right dimensions).
+        const placementFormatId = placement === 'landing' ? 'display_728x90' : 'display_300x250';
         const approved = await creativesStore.list({ status: 'approved', limit: 25 });
         let creative: (typeof approved)[number] | null = null;
         let attributedOrderId: string | null = null;
-        let fallbackCreative: (typeof approved)[number] | null = null;
+        let formatMatchFallback: (typeof approved)[number] | null = null;
+        let looseFallback: (typeof approved)[number] | null = null;
         for (const c of approved) {
+          const cFormatId = (c.format_id as { id?: string } | undefined)?.id;
+          const formatOk = cFormatId === placementFormatId;
           const order = mockUpstream.findOrderByCreativeId(c.creative_id);
-          if (!order) {
-            fallbackCreative ??= c;
-            continue;
-          }
-          if (order.product_ids.includes(productId)) {
+          if (order?.product_ids.includes(productId)) {
             creative = c;
             attributedOrderId = order.order_id;
             break;
           }
+          if (formatOk) {
+            formatMatchFallback ??= c;
+            if (order) attributedOrderId = order.order_id;
+          } else if (!order) {
+            looseFallback ??= c;
+          }
         }
-        creative = creative ?? fallbackCreative;
+        creative = creative ?? formatMatchFallback ?? looseFallback;
+        // If we picked the format-match fallback but didn't set an order,
+        // clear attributedOrderId so impression writes under the slot-scoped
+        // fallback key instead of a stale one from the search loop.
+        if (creative && !mockUpstream.findOrderByCreativeId(creative.creative_id)) {
+          attributedOrderId = null;
+        }
 
         const isAdcp = creative != null;
         const badgeLabel = isAdcp ? 'AdCP protocol' : 'generic campaign';
@@ -383,13 +462,21 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           referrer: req.headers.get('referer'),
         });
 
+        // The image must fit inside the iframe's declared frame regardless
+        // of its intrinsic aspect ratio — falls back to default.png which
+        // is a 1200x630 OG image; naive `width:100%; height:auto` clipped
+        // it to the iframe's top slice and looked like "no banner served".
+        // object-fit: contain scales the image within the box while
+        // preserving proportions; the flex centering keeps the letterboxed
+        // area balanced against the transparent iframe background.
         const html = `<!doctype html><html><head><meta charset="utf-8">
 <title>Purrsonality ad slot</title>
 <meta name="robots" content="noindex">
 <style>html,body{margin:0;padding:0;background:transparent;font-family:system-ui,-apple-system,sans-serif;}
-.slot{position:relative;display:block;}
-.slot img{display:block;width:100%;height:auto;border:0;}
-.badge{position:absolute;top:6px;right:6px;padding:2px 6px;font-size:9px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#fff;background:${badgeColor};border-radius:3px;pointer-events:none;box-shadow:0 1px 2px rgba(0,0,0,.25);}</style>
+html,body,.slot{width:100%;height:100%;}
+.slot{position:relative;display:flex;align-items:center;justify-content:center;text-decoration:none;}
+.slot img{display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;border:0;}
+.badge{position:absolute;top:6px;right:6px;padding:2px 6px;font-size:9px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#fff;background:${badgeColor};border-radius:3px;pointer-events:none;box-shadow:0 1px 2px rgba(0,0,0,.25);z-index:1;}</style>
 </head><body><a class="slot" href="${escapeHtmlAttr(clickHref)}" target="_top" rel="noopener"><img src="${escapeHtmlAttr(imageUrl)}" alt="${escapeHtmlAttr(altText)}"><span class="badge">${escapeHtmlAttr(badgeLabel)}</span></a></body></html>`;
 
         return new Response(html, {
