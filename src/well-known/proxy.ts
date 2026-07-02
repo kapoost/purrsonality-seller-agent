@@ -60,6 +60,23 @@ function pickAssetField(asset: unknown, key: string): string | null {
   return null;
 }
 
+/**
+ * Off-protocol persona routing tag. Buyer stores the full signal id
+ * (e.g. purr_persona_hunter) on assets.image.persona_tag when uploading
+ * a creative that should serve only to that persona; live-slot reads it
+ * to bias creative selection when the impression request carries a
+ * matching ?persona=<slug>. AdCP schema allows additionalProperties on
+ * creative.assets.image, so this is a legit extension surface. Returns
+ * the full signal id when present, empty string otherwise.
+ */
+function pickPersonaTag(assets: Record<string, unknown> | null | undefined): string {
+  if (!assets || typeof assets !== 'object') return '';
+  const image = (assets as Record<string, unknown>)['image'];
+  if (!image || typeof image !== 'object') return '';
+  const tag = (image as Record<string, unknown>)['persona_tag'];
+  return typeof tag === 'string' ? tag : '';
+}
+
 function escapeHtmlAttr(s: string | undefined | null): string {
   return String(s ?? '').replace(/[&<>"']/g, (c) => {
     if (c === '&') return '&amp;';
@@ -385,9 +402,28 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           : 'purr_result_card_v1';
         const fallbackMediaBuyId = `live-${placement}-slot`;
 
+        // Persona-conditional selection (result-slot only for now — landing
+        // has no quiz result yet). Cats frontend appends ?persona=<slug> to
+        // the iframe src on /r/[persona]; slug is one of tornado, hunter,
+        // tyrant, trickster, angel and maps to purr_persona_<slug> as
+        // published by signals.purrsonality.rocketscience.pl.
+        // Tag convention: creative.assets.image.persona_tag holds the full
+        // signal id (e.g. "purr_persona_trickster"). If a request carries
+        // a persona and any approved creative advertises that tag, the
+        // matching creatives take precedence over the format-only bucket.
+        // Untagged creatives keep working as universal fallbacks — no
+        // regression for buys that never opted into persona routing.
+        const requestedPersonaSlug = placement === 'result'
+          ? (url.searchParams.get('persona') ?? '').trim().toLowerCase()
+          : '';
+        const requestedPersonaSignal = requestedPersonaSlug
+          ? `purr_persona_${requestedPersonaSlug}`
+          : '';
+
         // Placement's declared format determines which creatives fit this
         // slot. Also try to find the matching media_buy for attribution.
         // Selection order:
+        //   0) persona-tag matches + format matches    → tightest (persona-routed buy)
         //   1) order-linked + product_id matches      → best (buy served)
         //   2) format_id matches this placement       → still correct dim
         //   3) order-linked to something else, wrong format → skip
@@ -409,6 +445,7 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
         // bucket. Rotating instead of always serving the latest lets every
         // active buyer's creative get airtime — otherwise the demo shows the
         // same one banner over and over until a newer one comes in.
+        const personaMatches: typeof approved = [];
         const bestMatches: typeof approved = [];
         const formatMatches: typeof approved = [];
         const looseFallbacks: typeof approved = [];
@@ -416,6 +453,16 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           const cFormatId = (c.format_id as { id?: string } | undefined)?.id;
           const formatOk = cFormatId === placementFormatId;
           const order = mockUpstream.findOrderByCreativeId(c.creative_id);
+          // Off-protocol convention: assets.image.persona_tag on the
+          // creative carries the full signal id (e.g. purr_persona_hunter).
+          // Only counts as a persona match when the placement had a
+          // ?persona= query AND the request's persona signal matches the
+          // tag AND the creative still fits the placement dimensions.
+          const cPersonaTag = pickPersonaTag(c.assets);
+          if (requestedPersonaSignal && formatOk && cPersonaTag === requestedPersonaSignal) {
+            personaMatches.push(c);
+            continue;
+          }
           if (order?.product_ids.includes(productId)) {
             bestMatches.push(c);
           } else if (formatOk) {
@@ -424,11 +471,13 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
             looseFallbacks.push(c);
           }
         }
-        const pickBucket = bestMatches.length > 0
-          ? bestMatches
-          : formatMatches.length > 0
-            ? formatMatches
-            : looseFallbacks;
+        const pickBucket = personaMatches.length > 0
+          ? personaMatches
+          : bestMatches.length > 0
+            ? bestMatches
+            : formatMatches.length > 0
+              ? formatMatches
+              : looseFallbacks;
         const creative = pickBucket.length > 0
           ? pickBucket[Math.floor(Math.random() * pickBucket.length)]!
           : null;
