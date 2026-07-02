@@ -504,6 +504,17 @@ export const mockUpstream = {
     return o?.package_creative_assignments?.[packageId] ?? [];
   },
 
+  /* Reverse lookup: given a package_id, find the order that owns it. */
+  findOrderByPackageId(packageId: string): MockOrder | null {
+    for (const o of orders.values()) {
+      const synth = o.synth_packages ?? [];
+      if (synth.some((sp) => sp.package_id === packageId)) return o;
+      // Legacy fallback: single-package buys where package_id is order_id_product_id.
+      if (packageId.startsWith(`${o.order_id}_`)) return o;
+    }
+    return null;
+  },
+
   /* Reverse lookup: given a creative_id, find the order it's assigned to.
    * Used by /live/result-slot to attribute the impression to the right
    * media_buy so getMediaBuyDelivery(media_buy_ids=[X]) actually returns

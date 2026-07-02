@@ -403,25 +403,35 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
         // now identical, so this line is retained only for parity with
         // the earlier scan structure and any future re-differentiation.
         const placementFormatId = 'display_300x250';
-        const approved = await creativesStore.list({ status: 'approved', limit: 25 });
-        let creative: (typeof approved)[number] | null = null;
-        let formatMatchFallback: (typeof approved)[number] | null = null;
-        let looseFallback: (typeof approved)[number] | null = null;
+        const approved = await creativesStore.list({ status: 'approved', limit: 100 });
+        // Bucket every approved creative by how well it matches THIS
+        // placement, then pick uniformly at random from the best-populated
+        // bucket. Rotating instead of always serving the latest lets every
+        // active buyer's creative get airtime — otherwise the demo shows the
+        // same one banner over and over until a newer one comes in.
+        const bestMatches: typeof approved = [];
+        const formatMatches: typeof approved = [];
+        const looseFallbacks: typeof approved = [];
         for (const c of approved) {
           const cFormatId = (c.format_id as { id?: string } | undefined)?.id;
           const formatOk = cFormatId === placementFormatId;
           const order = mockUpstream.findOrderByCreativeId(c.creative_id);
           if (order?.product_ids.includes(productId)) {
-            creative = c;
-            break;
-          }
-          if (formatOk) {
-            formatMatchFallback ??= c;
+            bestMatches.push(c);
+          } else if (formatOk) {
+            formatMatches.push(c);
           } else if (!order) {
-            looseFallback ??= c;
+            looseFallbacks.push(c);
           }
         }
-        creative = creative ?? formatMatchFallback ?? looseFallback;
+        const pickBucket = bestMatches.length > 0
+          ? bestMatches
+          : formatMatches.length > 0
+            ? formatMatches
+            : looseFallbacks;
+        const creative = pickBucket.length > 0
+          ? pickBucket[Math.floor(Math.random() * pickBucket.length)]!
+          : null;
         // Attribution reads from the persistent creatives.assigned_media_
         // buy_id column (populated by update_media_buy). Falls back to the
         // in-memory order lookup only for legacy creatives from before the

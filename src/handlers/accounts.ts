@@ -172,7 +172,11 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
       } as unknown as Account<PurrAccountMeta>;
     });
     const items = [primaryWithConfigs, ...sandbox];
-    const filterAny = filter as { sandbox?: boolean; account?: { account_id?: string } } | undefined;
+    const filterAny = filter as {
+      sandbox?: boolean;
+      account?: { account_id?: string };
+      pagination?: { max_results?: number; cursor?: string };
+    } | undefined;
     let filtered = items;
     // `sandbox: true` → keep only mode==='sandbox' rows (primary is already
     // in sandbox mode for sandbox principals). Previously this only returned
@@ -191,7 +195,19 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
     if (typeof targetAccountId === 'string') {
       filtered = filtered.filter((a) => a.id === targetAccountId);
     }
-    return { items: filtered };
+    // Cursor pagination — pagination_integrity_list_accounts walks with
+    // max_results=2 and expects has_more=true+cursor on page 1, has_more=false
+    // + no cursor on page 2. Offsets serialize into the opaque cursor as a
+    // decimal string; anything unparseable resets to page 0.
+    const pageSize = Math.max(1, Math.min(500, filterAny?.pagination?.max_results ?? 500));
+    const offset = Number.parseInt(filterAny?.pagination?.cursor ?? '0', 10) || 0;
+    const page = filtered.slice(offset, offset + pageSize);
+    const nextOffset = offset + page.length;
+    const hasMore = nextOffset < filtered.length;
+    return {
+      items: page,
+      ...(hasMore && { nextCursor: String(nextOffset) }),
+    };
   },
   // sync_accounts surface — 3.1 measurement_accountability + delivery_reporting
   // storyboards drive setup through this before exercising main assertions.

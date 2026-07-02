@@ -887,15 +887,15 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
 
     const successResponse: CreateMediaBuySuccess = {
       media_buy_id: order.order_id,
-      // AdCP 3.1 migration: media_buy_status is the canonical lifecycle
-      // field (pending_creatives / pending_start / active / paused); top-level
-      // status carries the same MediaBuyStatus during the migration window
-      // for 3.0 compatibility, and in 3.1 it shifts to task-envelope semantics
-      // (completed / submitted / failed). Setting both keeps 3.0 cache
-      // validators happy AND survives 3.1-aware runner coercion that reads
-      // /media_buy_status as ground truth.
+      // AdCP 3.1: media_buy_status carries the lifecycle value
+      // (pending_creatives / pending_start / active / paused / …); top-level
+      // status is the task-envelope status (completed / submitted / failed).
+      // Older 3.0 runners read the lifecycle value from top-level status —
+      // that path is retained by pending_creatives_to_start / create_second_
+      // buy under `field_value status: completed`, so setting completed here
+      // satisfies 3.1 without breaking 3.0 media_buy_status readers.
       media_buy_status: status,
-      status,
+      status: 'completed',
       valid_actions: validActionsForStatus(status),
       ...(availableActions.length > 0 && { available_actions: availableActions }),
       confirmed_at: order.created_at,
@@ -1948,6 +1948,32 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         action: submission.action,
         status: submission.status,
       } as SyncCreativesRow);
+    }
+    // 3.1 creative_fate_after_cancellation/reuse_creative_on_new_buy: buyers
+    // may pass top-level `assignments: [{creative_id, package_id}]` on
+    // sync_creatives to reassign a library creative to a new package. SDK
+    // doesn't route this field into the handler; read it off ctx.input, and
+    // for each entry, locate the owning order via mockUpstream and store the
+    // creative_id under its package's assignment slot. Also persists the
+    // link on the creatives table so live-slot attribution stays correct.
+    const inputAny = (ctx as { input?: { assignments?: unknown[] } }).input;
+    if (Array.isArray(inputAny?.assignments)) {
+      for (const rawAssignment of inputAny.assignments) {
+        const a = rawAssignment as { creative_id?: string; package_id?: string };
+        if (!a?.creative_id || !a?.package_id) continue;
+        const order = mockUpstream.findOrderByPackageId(a.package_id);
+        if (!order) continue;
+        const priorAssignments = mockUpstream.getPackageCreativeAssignments(order.order_id, a.package_id);
+        const already = priorAssignments.some((p) => p.creative_id === a.creative_id);
+        if (!already) {
+          mockUpstream.setPackageCreativeAssignments(
+            order.order_id,
+            a.package_id,
+            [...priorAssignments, { creative_id: a.creative_id }],
+          );
+        }
+        await creativesStore.setAssignedMediaBuyId(a.creative_id, order.order_id);
+      }
     }
     return results;
   },
