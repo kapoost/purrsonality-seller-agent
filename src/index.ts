@@ -7,6 +7,7 @@ import { log } from './observability/logger.ts';
 import { startHeartbeat } from './observability/heartbeat.ts';
 import { startMetricsFlusher } from './observability/metrics-store.ts';
 import { platform } from './platform.ts';
+import { mockUpstream } from './upstream/mock.ts';
 // `./signing.ts` retains its exports (jwksResolver, replayStore,
 // revocationStore, requestSigningCapability) — they're consumed by
 // well-known/proxy.ts (JWKS publication) and well-known/adcp-capabilities.ts
@@ -25,13 +26,27 @@ await runMigrations();
 // Drain accumulated comply-eval state from prior runs (creative status
 // overrides surviving in `creatives`, deterministic task ids in
 // `adcp_decisioning_tasks`, lingering `impressions`/`metrics_events`). Each
-// fly deploy starts on a clean slate; the AAO comply runner's
-// dependency_impairment chain is exquisitely sensitive to leftover creative
-// status from prior storyboards, and the persistent stores otherwise survive
-// process restarts. This is a no-op in in-memory mode (DATABASE_URL unset).
-const wipe = await wipePersistentTestState();
-if (wipe.tables_cleared.length > 0) {
-  console.log('[startup] wiped persistent comply tables:', wipe.tables_cleared.join(', '));
+// Persistent stores (creatives, impressions, tasks) normally survive every
+// process restart — that's how the demo keeps its Operator queue and live
+// slot state between deploys. Explicitly opt in to `WIPE_ON_BOOT=1` when
+// you need the AAO comply runner's dependency_impairment chain to see a
+// blank slate; leaving the flag unset preserves state, which is the
+// production expectation.
+if (process.env['WIPE_ON_BOOT'] === '1') {
+  const wipe = await wipePersistentTestState();
+  if (wipe.tables_cleared.length > 0) {
+    console.log('[startup] wiped persistent comply tables (WIPE_ON_BOOT=1):', wipe.tables_cleared.join(', '));
+  }
+}
+// Rehydrate mockUpstream.orders from the Postgres shadow so media buys
+// created before a redeploy remain visible to get_media_buys /
+// update_media_buy / live-slot attribution. Runs after WIPE_ON_BOOT so
+// an intentional wipe still hits a clean slate.
+try {
+  const restored = await mockUpstream.hydrateOrdersFromPostgres();
+  if (restored > 0) console.log(`[startup] hydrated ${restored} orders from mock_orders`);
+} catch (err) {
+  console.log('[startup] mock_orders hydrate failed:', err instanceof Error ? err.message : String(err));
 }
 const seed = await seedDemoCreative();
 if (seed.seeded) {

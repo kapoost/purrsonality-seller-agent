@@ -85,6 +85,21 @@ const AUDIT_CHAIN_STATE_MIGRATION = `
   );
 `;
 
+// Snapshot of mockUpstream.orders — the in-memory media buy registry that
+// used to evaporate on every seller restart. Write-through cache: memory
+// stays the source of truth for the sync mock API, this table is the
+// hydration source on boot so `get_media_buys` / `update_media_buy` /
+// live-slot assignment lookups survive redeploys.
+const MOCK_ORDERS_MIGRATION = `
+  CREATE TABLE IF NOT EXISTS mock_orders (
+    order_id TEXT PRIMARY KEY,
+    network_code TEXT NOT NULL,
+    data JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS mock_orders_network_code_idx ON mock_orders (network_code);
+`;
+
 export async function runMigrations(): Promise<void> {
   const pool = getPool();
   if (!pool) {
@@ -99,5 +114,6 @@ export async function runMigrations(): Promise<void> {
   await pool.query(CREATIVES_MIGRATION);
   await pool.query(IMPRESSIONS_MIGRATION);
   await pool.query(AUDIT_CHAIN_STATE_MIGRATION);
+  await pool.query(MOCK_ORDERS_MIGRATION);
   console.log('[db] Migrations complete.');
 }

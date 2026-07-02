@@ -1,4 +1,5 @@
 import { PRODUCTS, PUBLISHER, type PurrProductConfig, type ProductAllowedAction } from '../config/purrsonality.ts';
+import { ordersStore } from '../stores/orders.ts';
 
 export interface MockOrder {
   order_id: string;
@@ -408,6 +409,7 @@ export const mockUpstream = {
 
     orders.set(order.order_id, order);
     if (args.client_request_id) requestKey.set(args.client_request_id, order.order_id);
+    ordersStore.persist(order);
     return order;
   },
 
@@ -432,6 +434,7 @@ export const mockUpstream = {
     if (package_budgets) {
       o.package_budgets = { ...(o.package_budgets ?? {}), ...package_budgets };
     }
+    ordersStore.persist(o);
     return o;
   },
 
@@ -462,6 +465,7 @@ export const mockUpstream = {
     if (!o) return;
     o.package_overlays = o.package_overlays ?? {};
     o.package_overlays[productId] = { ...(o.package_overlays[productId] ?? {}), ...overlay };
+    ordersStore.persist(o);
   },
 
   /** Canonical per-package allocation table. Written by createMediaBuy
@@ -480,6 +484,7 @@ export const mockUpstream = {
     const o = orders.get(orderId);
     if (!o) return;
     o.synth_packages = synth.map((p) => ({ ...p }));
+    ordersStore.persist(o);
   },
 
   /** 3.1 dependency_impairment — replacement semantics on package
@@ -494,6 +499,7 @@ export const mockUpstream = {
     if (!o) return;
     o.package_creative_assignments = o.package_creative_assignments ?? {};
     o.package_creative_assignments[packageId] = [...assignments];
+    ordersStore.persist(o);
   },
 
   getPackageCreativeAssignments(
@@ -577,6 +583,7 @@ export const mockUpstream = {
     }
     if (args.packages && args.packages.length > 0) order.seeded_packages = args.packages;
     orders.set(args.media_buy_id, order);
+    ordersStore.persist(order);
     return order;
   },
 
@@ -585,6 +592,7 @@ export const mockUpstream = {
     if (!order) return undefined;
     const previous = order.status;
     order.status = status;
+    ordersStore.persist(order);
     return previous;
   },
 
@@ -768,5 +776,14 @@ export const mockUpstream = {
     unavailableUpstreams.clear();
     this._accountStatusOverrides.clear();
     this._creativeStatusOverrides.clear();
+  },
+
+  /* Called once from src/index.ts before Bun.serve starts. Rehydrates the
+   * private `orders` Map from the mock_orders Postgres shadow so
+   * get_media_buys / update_media_buy / live-slot lookups keep working after
+   * a redeploy. `orders` is module-scoped and never exported, so callers
+   * cannot hydrate directly — this method is the only path in. */
+  async hydrateOrdersFromPostgres(): Promise<number> {
+    return ordersStore.hydrate(orders);
   },
 };

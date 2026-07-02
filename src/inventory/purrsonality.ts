@@ -1600,6 +1600,24 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     const list = Array.isArray(creatives) ? creatives : [];
     const accountId = ctx.account?.id;
     const accountIdHash = hashAccountId(accountId);
+    // 3.1 sync-creatives-response requires `creatives[i].assigned_to: string[]`
+    // "only present when assignments were requested". Build the mapping once
+    // from the top-level `assignments[]` (SDK 9.6+ surfaces this on ctx.input
+    // per RequestContext.input docs — see @adcp/sdk#docstring on
+    // RequestContext.input) so every row we push below can carry its
+    // assigned_to. Response-schema check on creative_fate_after_cancellation/
+    // reuse_creative_on_new_buy fails without this.
+    const topLevelAssignmentsRaw = (ctx as { input?: { assignments?: unknown[] } }).input?.assignments;
+    const assignmentsByCreativeId = new Map<string, string[]>();
+    if (Array.isArray(topLevelAssignmentsRaw)) {
+      for (const rawAssignment of topLevelAssignmentsRaw) {
+        const a = rawAssignment as { creative_id?: string; package_id?: string };
+        if (!a?.creative_id || !a?.package_id) continue;
+        const arr = assignmentsByCreativeId.get(a.creative_id) ?? [];
+        if (!arr.includes(a.package_id)) arr.push(a.package_id);
+        assignmentsByCreativeId.set(a.creative_id, arr);
+      }
+    }
     // Sandbox principals bypass the review queue so storyboards (which assume
     // status=approved on first sync) keep passing. Anonymous buyers (e.g., the
     // Abzu demo orchestrator) submit at pending_review and need an operator
@@ -1943,10 +1961,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         autoApprove,
       });
 
+      const rowAssignedTo = assignmentsByCreativeId.get(submission.creative_id);
       results.push({
         creative_id: submission.creative_id,
         action: submission.action,
         status: submission.status,
+        ...(rowAssignedTo && rowAssignedTo.length > 0 && { assigned_to: [...rowAssignedTo] }),
       } as SyncCreativesRow);
     }
     // 3.1 creative_fate_after_cancellation/reuse_creative_on_new_buy: buyers
