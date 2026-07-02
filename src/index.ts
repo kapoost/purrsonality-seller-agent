@@ -50,7 +50,7 @@ try {
 }
 const seed = await seedDemoCreative();
 if (seed.seeded) {
-  console.log('[startup] seeded demo creative for /live/result-slot');
+  console.log(`[startup] seeded ${seed.count} persona demo creatives for /live/result-slot`);
 }
 startMetricsFlusher();
 startHeartbeat();

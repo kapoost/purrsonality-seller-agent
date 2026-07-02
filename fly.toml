@@ -13,6 +13,10 @@ primary_region = "fra"
   PUBLIC_BASE_URL = "https://purrsonality-seller.fly.dev"
   # ADCP_SANDBOX celowo NIE 1 — production reject live caller comply controller
   # (per Addie #1, "compliance_testing block niewidoczny dla live principal").
+  # Seed 5 persona-tagged banners on boot so /live/result-slot?persona=X can
+  # route to the matching creative without waiting for an actual sync_creatives
+  # upload. Idempotent — creativesStore.submit updates existing rows in place.
+  DEMO_SEED_CREATIVE = "true"
 
 [http_service]
   internal_port = 8080
