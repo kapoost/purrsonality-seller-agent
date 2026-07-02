@@ -12,7 +12,7 @@
 //   - viewability / fraud detection
 // Live integration with purrsonality.pages.dev quiz page is Phase B.
 
-import { getPool } from '../db/pool.ts';
+import { getPool, withRetry } from '../db/pool.ts';
 
 export type ImpressionEventType = 'impression' | 'click';
 
@@ -35,24 +35,26 @@ const memory: Array<RecordInput & { id: number; ts: string }> = [];
 
 export const impressionsStore = {
   async record(input: RecordInput): Promise<void> {
-    const pool = getPool();
-    if (!pool) {
-      memory.push({ ...input, id: memory.length + 1, ts: new Date().toISOString() });
-      return;
-    }
     try {
-      await pool.query(
-        `INSERT INTO impressions (media_buy_id, creative_id, event_type, account_id_hash, user_agent, referrer)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [
-          input.media_buy_id,
-          input.creative_id,
-          input.event_type,
-          input.account_id_hash,
-          input.user_agent ?? null,
-          input.referrer ?? null,
-        ],
-      );
+      await withRetry(async () => {
+        const pool = getPool();
+        if (!pool) {
+          memory.push({ ...input, id: memory.length + 1, ts: new Date().toISOString() });
+          return;
+        }
+        await pool.query(
+          `INSERT INTO impressions (media_buy_id, creative_id, event_type, account_id_hash, user_agent, referrer)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            input.media_buy_id,
+            input.creative_id,
+            input.event_type,
+            input.account_id_hash,
+            input.user_agent ?? null,
+            input.referrer ?? null,
+          ],
+        );
+      });
     } catch {
       // Drop on failure — adserver delivery must not block on logging.
     }

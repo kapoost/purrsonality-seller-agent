@@ -17,7 +17,7 @@
 // Map when not set (dev with no DB) — operator review still works during
 // the process lifetime; gone on restart.
 
-import { getPool } from '../db/pool.ts';
+import { getPool, withRetry } from '../db/pool.ts';
 
 export type CreativeStatus = 'processing' | 'pending_review' | 'approved' | 'rejected' | 'archived';
 
@@ -191,31 +191,33 @@ export const creativesStore = {
   },
 
   async list(filter: ListFilter): Promise<CreativeRow[]> {
-    const pool = getPool();
-    if (!pool) return memoryList(filter);
+    return withRetry(async () => {
+      const pool = getPool();
+      if (!pool) return memoryList(filter);
 
-    const conds: string[] = [];
-    const params: unknown[] = [];
-    if (filter.accountIdHash !== undefined && filter.accountIdHash !== null) {
-      params.push(filter.accountIdHash);
-      conds.push(`account_id_hash = $${params.length}`);
-    }
-    if (filter.status) {
-      params.push(filter.status);
-      conds.push(`status = $${params.length}`);
-    }
-    const limit = Math.min(500, Math.max(1, filter.limit ?? 100));
-    params.push(limit);
-    const sql = `
-      SELECT creative_id, account_id_hash, format_id, name, assets, status,
-             submitted_at, reviewed_at, review_note, assigned_media_buy_id
-      FROM creatives
-      ${conds.length > 0 ? 'WHERE ' + conds.join(' AND ') : ''}
-      ORDER BY submitted_at DESC
-      LIMIT $${params.length}
-    `;
-    const res = await pool.query(sql, params);
-    return res.rows.map(rowFromPg);
+      const conds: string[] = [];
+      const params: unknown[] = [];
+      if (filter.accountIdHash !== undefined && filter.accountIdHash !== null) {
+        params.push(filter.accountIdHash);
+        conds.push(`account_id_hash = $${params.length}`);
+      }
+      if (filter.status) {
+        params.push(filter.status);
+        conds.push(`status = $${params.length}`);
+      }
+      const limit = Math.min(500, Math.max(1, filter.limit ?? 100));
+      params.push(limit);
+      const sql = `
+        SELECT creative_id, account_id_hash, format_id, name, assets, status,
+               submitted_at, reviewed_at, review_note, assigned_media_buy_id
+        FROM creatives
+        ${conds.length > 0 ? 'WHERE ' + conds.join(' AND ') : ''}
+        ORDER BY submitted_at DESC
+        LIMIT $${params.length}
+      `;
+      const res = await pool.query(sql, params);
+      return res.rows.map(rowFromPg);
+    });
   },
 
   async setStatus(
@@ -238,16 +240,18 @@ export const creativesStore = {
   },
 
   async get(id: string): Promise<CreativeRow | null> {
-    const pool = getPool();
-    if (!pool) return memoryGet(id);
+    return withRetry(async () => {
+      const pool = getPool();
+      if (!pool) return memoryGet(id);
 
-    const sql = `
-      SELECT creative_id, account_id_hash, format_id, name, assets, status,
-             submitted_at, reviewed_at, review_note, assigned_media_buy_id
-      FROM creatives WHERE creative_id = $1
-    `;
-    const res = await pool.query(sql, [id]);
-    return res.rows[0] ? rowFromPg(res.rows[0]) : null;
+      const sql = `
+        SELECT creative_id, account_id_hash, format_id, name, assets, status,
+               submitted_at, reviewed_at, review_note, assigned_media_buy_id
+        FROM creatives WHERE creative_id = $1
+      `;
+      const res = await pool.query(sql, [id]);
+      return res.rows[0] ? rowFromPg(res.rows[0]) : null;
+    });
   },
 
   /* Persist the creative→media_buy link written by update_media_buy(
