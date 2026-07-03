@@ -583,7 +583,17 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
         // Inline the image bytes into the HTML so content blockers can't
         // filter it on network fetch. See inlineAsDataUrl above for the
         // full rationale + cache + size guard.
-        const inlineImageUrl = await inlineAsDataUrl(imageUrl);
+        let inlineImageUrl = await inlineAsDataUrl(imageUrl);
+        // Fall back to the seller-hosted agent SVG when the source URL
+        // failed (inlineAsDataUrl returns the raw URL on any 4xx/5xx).
+        // Common cause: a Ren-generated asset whose in-memory host
+        // evicted the bytes on Fly-suspend. Serving the placeholder from
+        // the same origin means the buyer always sees SOMETHING branded
+        // instead of a broken-image icon.
+        if (inlineImageUrl === imageUrl && !imageUrl.startsWith('data:')) {
+          const fallbackSvgUrl = `${url.origin}/generated/agent-creative.svg?brand=${encodeURIComponent(placement)}&product=${encodeURIComponent(productId)}&size=${placementFormatId.replace('display_', '')}`;
+          inlineImageUrl = await inlineAsDataUrl(fallbackSvgUrl);
+        }
 
         // The image must fit inside the iframe's declared frame regardless
         // of its intrinsic aspect ratio — falls back to default.png which
