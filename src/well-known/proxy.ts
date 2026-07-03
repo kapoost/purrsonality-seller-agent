@@ -78,6 +78,52 @@ function pickAudienceTag(assets: Record<string, unknown> | null | undefined): st
   return typeof tag === 'string' ? tag : '';
 }
 
+/*
+ * Inline an external image URL as a base64 data: URL so the iframe HTML
+ * carries the bytes directly. Content blockers (uBlock, Ghostery, Safari
+ * Filter) intercept the network fetch for any external image URL — even
+ * when the domain is unambiguously first-party for us, the "-ads" /
+ * "creative" / "banner" / "sponsored" substrings in a URL trigger a hit
+ * and the buyer sees a broken-image icon. Data URLs move the bytes into
+ * the HTML itself; blockers only see one `text/html` load and no
+ * follow-up image request to inspect.
+ *
+ * Cache the encoded bytes in memory for 10 minutes keyed by URL, capped
+ * at 500 KB per asset — bigger assets fall back to the raw URL because
+ * base64 growth on a 1 MB PNG would push the iframe past reasonable
+ * inline budgets. Returns the raw URL on any fetch failure so we never
+ * emit a broken <img> tag.
+ */
+const INLINE_ASSET_CACHE = new Map<string, { data: string; at: number }>();
+const INLINE_ASSET_TTL_MS = 10 * 60 * 1000;
+const INLINE_ASSET_MAX_BYTES = 500 * 1024;
+async function inlineAsDataUrl(url: string): Promise<string> {
+  if (!url || url.startsWith('data:')) return url;
+  const now = Date.now();
+  const cached = INLINE_ASSET_CACHE.get(url);
+  if (cached && now - cached.at < INLINE_ASSET_TTL_MS) return cached.data;
+  try {
+    const r = await fetch(url, {
+      signal: AbortSignal.timeout(6000),
+      headers: { accept: 'image/*' },
+    });
+    if (!r.ok) return url;
+    const raw = r.headers.get('content-type') ?? '';
+    const contentType = raw.split(';')[0]?.trim() || 'image/png';
+    // Guard against text/html error pages served as 200 with the wrong
+    // content-type; only image/* is worth inlining.
+    if (!contentType.startsWith('image/')) return url;
+    const buf = new Uint8Array(await r.arrayBuffer());
+    if (buf.byteLength > INLINE_ASSET_MAX_BYTES) return url;
+    const b64 = Buffer.from(buf).toString('base64');
+    const dataUrl = `data:${contentType};base64,${b64}`;
+    INLINE_ASSET_CACHE.set(url, { data: dataUrl, at: now });
+    return dataUrl;
+  } catch {
+    return url;
+  }
+}
+
 function escapeHtmlAttr(s: string | undefined | null): string {
   return String(s ?? '').replace(/[&<>"']/g, (c) => {
     if (c === '&') return '&amp;';
@@ -534,6 +580,11 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           referrer: req.headers.get('referer'),
         });
 
+        // Inline the image bytes into the HTML so content blockers can't
+        // filter it on network fetch. See inlineAsDataUrl above for the
+        // full rationale + cache + size guard.
+        const inlineImageUrl = await inlineAsDataUrl(imageUrl);
+
         // The image must fit inside the iframe's declared frame regardless
         // of its intrinsic aspect ratio — falls back to default.png which
         // is a 1200x630 OG image; naive `width:100%; height:auto` clipped
@@ -549,7 +600,7 @@ html,body,.slot{width:100%;height:100%;}
 .slot{position:relative;display:flex;align-items:center;justify-content:center;text-decoration:none;}
 .slot img{display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;border:0;}
 .badge{position:absolute;top:6px;right:6px;padding:2px 6px;font-size:9px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#fff;background:${badgeColor};border-radius:3px;pointer-events:none;box-shadow:0 1px 2px rgba(0,0,0,.25);z-index:1;}</style>
-</head><body><a class="slot" href="${escapeHtmlAttr(clickHref)}" target="_top" rel="noopener"><img src="${escapeHtmlAttr(imageUrl)}" alt="${escapeHtmlAttr(altText)}"><span class="badge">${escapeHtmlAttr(badgeLabel)}</span></a></body></html>`;
+</head><body><a class="slot" href="${escapeHtmlAttr(clickHref)}" target="_top" rel="noopener"><img src="${escapeHtmlAttr(inlineImageUrl)}" alt="${escapeHtmlAttr(altText)}"><span class="badge">${escapeHtmlAttr(badgeLabel)}</span></a></body></html>`;
 
         return new Response(html, {
           status: 200,

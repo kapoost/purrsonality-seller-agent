@@ -60,3 +60,23 @@ export async function closePool(): Promise<void> {
     cached = null;
   }
 }
+
+// Pool-shaped queryable that transparently retries a query once when the
+// first attempt hits a suspend/wake dead connection. `withRetry` invalidates
+// the module-level pool cache on failure, so the second attempt re-resolves
+// a fresh pool via getPool(). Used to feed pgBackend / PostgresStateStore /
+// createPostgresTaskRegistry — none of them retry internally, and every
+// mutating call goes through the idempotency middleware, so a stale pool
+// after Fly's auto_stop=suspend blew up create_media_buy with
+// SERVICE_UNAVAILABLE: Idempotency check failed.
+export function retryingQueryable(): {
+  query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number | null }>;
+} {
+  return {
+    query(text, values) {
+      return withRetry(() =>
+        getPool()!.query(text, values) as Promise<{ rows: Record<string, unknown>[]; rowCount: number | null }>,
+      );
+    },
+  };
+}

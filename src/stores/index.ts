@@ -9,7 +9,7 @@ import {
 } from '@adcp/sdk/server';
 import { pgBackend } from '@adcp/sdk/server';
 import type { AdcpStateStore } from '@adcp/sdk/server';
-import { getPool } from '../db/pool.ts';
+import { getPool, retryingQueryable } from '../db/pool.ts';
 
 const pool = getPool();
 const usingPostgres = pool !== null;
@@ -20,18 +20,23 @@ if (usingPostgres) {
   console.log('[stores] Using in-memory backend (DATABASE_URL not set)');
 }
 
+// Wrap every Postgres-backed store with a retrying queryable so a stale
+// connection after Fly's suspend/wake surfaces as one silent retry rather
+// than SERVICE_UNAVAILABLE bubbling to the buyer. See db/pool.ts.
+const pgDb = usingPostgres ? retryingQueryable() : null;
+
 export const idempotencyStore = usingPostgres
-  ? createIdempotencyStore({ backend: pgBackend(pool!), ttlSeconds: 86_400 })
+  ? createIdempotencyStore({ backend: pgBackend(pgDb!), ttlSeconds: 86_400 })
   : createIdempotencyStore({ backend: memoryBackend(), ttlSeconds: 86_400 });
 
 export const stateStore: AdcpStateStore = usingPostgres
-  ? new PostgresStateStore(pool!)
+  ? new PostgresStateStore(pgDb!)
   : new InMemoryStateStore();
 
 export const mediaBuyStore = createMediaBuyStore({ store: stateStore });
 
 export const taskRegistry = usingPostgres
-  ? createPostgresTaskRegistry({ pool: pool! })
+  ? createPostgresTaskRegistry({ pool: pgDb! })
   : createInMemoryTaskRegistry();
 
 // Deterministic task_id collision dropper for the AAO comply runner.
