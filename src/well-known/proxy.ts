@@ -61,19 +61,22 @@ function pickAssetField(asset: unknown, key: string): string | null {
 }
 
 /**
- * Off-protocol persona routing tag. Buyer stores the full signal id
- * (e.g. purr_persona_hunter) on assets.image.persona_tag when uploading
- * a creative that should serve only to that persona; live-slot reads it
- * to bias creative selection when the impression request carries a
- * matching ?persona=<slug>. AdCP schema allows additionalProperties on
- * creative.assets.image, so this is a legit extension surface. Returns
- * the full signal id when present, empty string otherwise.
+ * Off-protocol audience routing tag. Buyer stores the full signal id
+ * (e.g. purr_persona_hunter, signal-stack.io/adventure_seekers) on
+ * assets.image.audience_tag when uploading a creative that should serve
+ * only to that audience segment; live-slot reads it to bias creative
+ * selection when the impression request carries a matching ?audience=<slug>.
+ * AdCP schema allows additionalProperties on creative.assets.image, so
+ * this is a legit extension surface. Legacy `persona_tag` is honored as a
+ * fallback so pre-rename buys continue to route correctly. Returns the
+ * full signal id when present, empty string otherwise.
  */
-function pickPersonaTag(assets: Record<string, unknown> | null | undefined): string {
+function pickAudienceTag(assets: Record<string, unknown> | null | undefined): string {
   if (!assets || typeof assets !== 'object') return '';
   const image = (assets as Record<string, unknown>)['image'];
   if (!image || typeof image !== 'object') return '';
-  const tag = (image as Record<string, unknown>)['persona_tag'];
+  const tag = (image as Record<string, unknown>)['audience_tag']
+    ?? (image as Record<string, unknown>)['persona_tag'];
   return typeof tag === 'string' ? tag : '';
 }
 
@@ -402,28 +405,35 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           : 'purr_result_card_v1';
         const fallbackMediaBuyId = `live-${placement}-slot`;
 
-        // Persona-conditional selection (result-slot only for now — landing
+        // Audience-conditional selection (result-slot only for now — landing
         // has no quiz result yet). Cats frontend appends ?persona=<slug> to
-        // the iframe src on /r/[persona]; slug is one of tornado, hunter,
-        // tyrant, trickster, angel and maps to purr_persona_<slug> as
-        // published by signals.purrsonality.rocketscience.pl.
-        // Tag convention: creative.assets.image.persona_tag holds the full
-        // signal id (e.g. "purr_persona_trickster"). If a request carries
-        // a persona and any approved creative advertises that tag, the
-        // matching creatives take precedence over the format-only bucket.
-        // Untagged creatives keep working as universal fallbacks — no
-        // regression for buys that never opted into persona routing.
-        const requestedPersonaSlug = placement === 'result'
-          ? (url.searchParams.get('persona') ?? '').trim().toLowerCase()
+        // the iframe src on /r/[persona]; buyers using AdCP audience routing
+        // send ?audience=<slug>. Both accepted; we treat cats slugs as cat
+        // persona segments and prefix with purr_persona_ to match the signal
+        // id published by signals.purrsonality.rocketscience.pl.
+        // Tag convention: creative.assets.image.audience_tag holds the full
+        // signal id (e.g. "purr_persona_trickster", "signal-stack.io/…"). If
+        // a request carries an audience and any approved creative advertises
+        // that tag, the matching creatives take precedence over the
+        // format-only bucket. Untagged creatives keep working as universal
+        // fallbacks — no regression for buys that never opted into audience
+        // routing. Legacy ?persona= query + persona_tag on assets are still
+        // read for backwards compatibility.
+        const requestedAudienceSlug = placement === 'result'
+          ? (url.searchParams.get('audience') ?? url.searchParams.get('persona') ?? '')
+              .trim()
+              .toLowerCase()
           : '';
-        const requestedPersonaSignal = requestedPersonaSlug
-          ? `purr_persona_${requestedPersonaSlug}`
+        const requestedAudienceSignal = requestedAudienceSlug
+          ? (requestedAudienceSlug.includes('_') || requestedAudienceSlug.includes('/')
+              ? requestedAudienceSlug
+              : `purr_persona_${requestedAudienceSlug}`)
           : '';
 
         // Placement's declared format determines which creatives fit this
         // slot. Also try to find the matching media_buy for attribution.
         // Selection order:
-        //   0) persona-tag matches + format matches    → tightest (persona-routed buy)
+        //   0) audience-tag matches + format matches   → tightest (audience-routed buy)
         //   1) order-linked + product_id matches      → best (buy served)
         //   2) format_id matches this placement       → still correct dim
         //   3) order-linked to something else, wrong format → skip
@@ -445,7 +455,7 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
         // bucket. Rotating instead of always serving the latest lets every
         // active buyer's creative get airtime — otherwise the demo shows the
         // same one banner over and over until a newer one comes in.
-        const personaMatches: typeof approved = [];
+        const audienceMatches: typeof approved = [];
         const bestMatches: typeof approved = [];
         const formatMatches: typeof approved = [];
         const looseFallbacks: typeof approved = [];
@@ -453,14 +463,15 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           const cFormatId = (c.format_id as { id?: string } | undefined)?.id;
           const formatOk = cFormatId === placementFormatId;
           const order = mockUpstream.findOrderByCreativeId(c.creative_id);
-          // Off-protocol convention: assets.image.persona_tag on the
-          // creative carries the full signal id (e.g. purr_persona_hunter).
-          // Only counts as a persona match when the placement had a
-          // ?persona= query AND the request's persona signal matches the
-          // tag AND the creative still fits the placement dimensions.
-          const cPersonaTag = pickPersonaTag(c.assets);
-          if (requestedPersonaSignal && formatOk && cPersonaTag === requestedPersonaSignal) {
-            personaMatches.push(c);
+          // Off-protocol convention: assets.image.audience_tag on the
+          // creative carries the full signal id (e.g. purr_persona_hunter,
+          // signal-stack.io/adventure_seekers). Only counts as an audience
+          // match when the placement had an ?audience= (or legacy ?persona=)
+          // query AND the request's audience signal matches the tag AND the
+          // creative still fits the placement dimensions.
+          const cAudienceTag = pickAudienceTag(c.assets);
+          if (requestedAudienceSignal && formatOk && cAudienceTag === requestedAudienceSignal) {
+            audienceMatches.push(c);
             continue;
           }
           if (order?.product_ids.includes(productId)) {
@@ -471,8 +482,8 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
             looseFallbacks.push(c);
           }
         }
-        const pickBucket = personaMatches.length > 0
-          ? personaMatches
+        const pickBucket = audienceMatches.length > 0
+          ? audienceMatches
           : bestMatches.length > 0
             ? bestMatches
             : formatMatches.length > 0
