@@ -67,16 +67,14 @@ function pickAssetField(asset: unknown, key: string): string | null {
  * only to that audience segment; live-slot reads it to bias creative
  * selection when the impression request carries a matching ?audience=<slug>.
  * AdCP schema allows additionalProperties on creative.assets.image, so
- * this is a legit extension surface. Legacy `persona_tag` is honored as a
- * fallback so pre-rename buys continue to route correctly. Returns the
- * full signal id when present, empty string otherwise.
+ * this is a legit extension surface. Returns the full signal id when
+ * present, empty string otherwise.
  */
 function pickAudienceTag(assets: Record<string, unknown> | null | undefined): string {
   if (!assets || typeof assets !== 'object') return '';
   const image = (assets as Record<string, unknown>)['image'];
   if (!image || typeof image !== 'object') return '';
-  const tag = (image as Record<string, unknown>)['audience_tag']
-    ?? (image as Record<string, unknown>)['persona_tag'];
+  const tag = (image as Record<string, unknown>)['audience_tag'];
   return typeof tag === 'string' ? tag : '';
 }
 
@@ -406,23 +404,21 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
         const fallbackMediaBuyId = `live-${placement}-slot`;
 
         // Audience-conditional selection (result-slot only for now — landing
-        // has no quiz result yet). Cats frontend appends ?persona=<slug> to
+        // has no quiz result yet). Cats frontend appends ?audience=<slug> to
         // the iframe src on /r/[persona]; buyers using AdCP audience routing
-        // send ?audience=<slug>. Both accepted; we treat cats slugs as cat
-        // persona segments and prefix with purr_persona_ to match the signal
-        // id published by signals.purrsonality.rocketscience.pl.
-        // Tag convention: creative.assets.image.audience_tag holds the full
-        // signal id (e.g. "purr_persona_trickster", "signal-stack.io/…"). If
+        // send the same query. Bare slugs (no _ or /) are prefixed with
+        // purr_persona_ so cat-persona slugs like "trickster" match the
+        // signal id published by signals.purrsonality.rocketscience.pl.
+        // Full signal ids from other sources ("signal-stack.io/…") pass
+        // through untouched. Tag convention:
+        // creative.assets.image.audience_tag holds the full signal id. If
         // a request carries an audience and any approved creative advertises
         // that tag, the matching creatives take precedence over the
         // format-only bucket. Untagged creatives keep working as universal
-        // fallbacks — no regression for buys that never opted into audience
-        // routing. Legacy ?persona= query + persona_tag on assets are still
-        // read for backwards compatibility.
+        // fallbacks — no regression for buys that never opted into
+        // audience routing.
         const requestedAudienceSlug = placement === 'result'
-          ? (url.searchParams.get('audience') ?? url.searchParams.get('persona') ?? '')
-              .trim()
-              .toLowerCase()
+          ? (url.searchParams.get('audience') ?? '').trim().toLowerCase()
           : '';
         const requestedAudienceSignal = requestedAudienceSlug
           ? (requestedAudienceSlug.includes('_') || requestedAudienceSlug.includes('/')
@@ -466,9 +462,9 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           // Off-protocol convention: assets.image.audience_tag on the
           // creative carries the full signal id (e.g. purr_persona_hunter,
           // signal-stack.io/adventure_seekers). Only counts as an audience
-          // match when the placement had an ?audience= (or legacy ?persona=)
-          // query AND the request's audience signal matches the tag AND the
-          // creative still fits the placement dimensions.
+          // match when the placement had an ?audience= query AND the
+          // request's audience signal matches the tag AND the creative
+          // still fits the placement dimensions.
           const cAudienceTag = pickAudienceTag(c.assets);
           if (requestedAudienceSignal && formatOk && cAudienceTag === requestedAudienceSignal) {
             audienceMatches.push(c);

@@ -15,12 +15,26 @@
 // Gated on DEMO_SEED_CREATIVE=true so comply eval environments stay untouched.
 
 import { creativesStore } from '../stores/creatives.ts';
+import { getPool, withRetry } from '../db/pool.ts';
 
 const AUDIENCE_SLUGS = ['angel', 'hunter', 'tornado', 'trickster', 'tyrant'] as const;
 
 export async function seedDemoCreative(): Promise<{ seeded: boolean; count: number }> {
   if (process.env['DEMO_SEED_CREATIVE'] !== 'true') {
     return { seeded: false, count: 0 };
+  }
+  // Purge previous-schema seeds (demo-seed-persona-*, demo-seed-cat-banner).
+  // Without this cleanup the rename left orphan rows tagged with persona_tag
+  // in the creatives table — since we've dropped the legacy fallback in the
+  // live-slot matcher, they'd never route to a persona query anymore but
+  // would still show up in the loose-fallback bucket and rotate confusingly.
+  const pool = getPool();
+  if (pool) {
+    await withRetry(async () => {
+      await pool.query(
+        `DELETE FROM creatives WHERE creative_id IN ('demo-seed-cat-banner') OR creative_id LIKE 'demo-seed-persona-%'`,
+      );
+    });
   }
   for (const slug of AUDIENCE_SLUGS) {
     await creativesStore.submit({
