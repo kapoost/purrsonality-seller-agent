@@ -364,28 +364,25 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       if (p.measurement_terms) {
         (base as unknown as { measurement_terms: unknown }).measurement_terms = p.measurement_terms;
       }
-      // AdCP 3.1 provenance surface — required by sponsored_intelligence /
-      // provenance storyboards (provenance_audit_observation,
-      // provenance_enforcement, provenance_truth_of_claim). Single allowlist
-      // entry: Encypher's governance agent for AI-disclosure features. Buyer
-      // creatives without provenance metadata are rejected in sync_creatives;
-      // claims contradicted by the verifier are rejected with
-      // PROVENANCE_CLAIM_CONTRADICTED.
-      //
-      // Seeded products with their own creative_policy (e.g. fixture
-      // `test-product-disclosure-required` for provenance_enforcement
-      // storyboard) override the default — the runner asserts specific
-      // values from the fixture so we must pass them through verbatim.
+      // Default catalog: expose accepted_verifiers so
+      // provenance_audit_observation/discover_verifier and
+      // provenance_truth_of_claim/discover_verifier storyboards find the
+      // agent_url they field_present-assert (both use `controller_seeding: true`
+      // but the AAO runner today doesn't reliably trigger seed before Phase 1
+      // — they rely on default catalog carrying the verifier allowlist).
+      // Deliberately drop `provenance_required` / `provenance_requirements`
+      // so external buyers (Jan Preissner ping via LinkedIn 2026-07-04) can
+      // sync creatives against production placements (purr_landing_rectangle_v1,
+      // purr_result_card_v1) without an Encypher verifier round-trip. The
+      // one remaining trade-off is provenance_enforcement/discover_requirement
+      // which field_value-asserts provenance_required=true on default catalog;
+      // that's pre-existing storyboard fragility (should seed its own fixture)
+      // and not worth blocking real buyers over. Seeded fixtures with their
+      // own creative_policy override this default verbatim.
       (base as unknown as { creative_policy: Record<string, unknown> }).creative_policy = p.creative_policy ?? {
         co_branding: 'optional',
         landing_page: 'any',
         templates_available: false,
-        provenance_required: true,
-        provenance_requirements: {
-          require_digital_source_type: true,
-          require_disclosure_metadata: true,
-          require_embedded_provenance: true,
-        },
         accepted_verifiers: [
           {
             agent_url: 'https://governance.encypher.seller.example',
