@@ -103,7 +103,14 @@ function pickAudienceTag(assets: Record<string, unknown> | null | undefined): st
 const INLINE_ASSET_CACHE = new Map<string, { data: string | null; at: number }>();
 const INLINE_ASSET_TTL_OK_MS = 10 * 60 * 1000;
 const INLINE_ASSET_TTL_FAIL_MS = 5 * 60 * 1000;
-const INLINE_ASSET_MAX_BYTES = 500 * 1024;
+// 3 MB — base64 growth pushes the HTML to ~4 MB per impression, which is
+// on the heavy side for a 300x250 slot but still under most CDN and browser
+// document size caps. The original 500 KB / then 1 MB budget dropped real
+// buyer assets on the floor: lays.pl serves a 2.5 MB PNG chip pack shot that
+// an operator needs to route through /live/*-slot; the loop was silently
+// skipping it and rotating older creatives instead. Anything past 3 MB
+// should be re-encoded upstream anyway.
+const INLINE_ASSET_MAX_BYTES = 3 * 1024 * 1024;
 async function inlineAsDataUrl(url: string): Promise<string | null> {
   if (!url) return null;
   if (url.startsWith('data:')) return url;
@@ -554,17 +561,33 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
             : formatMatches.length > 0
               ? formatMatches
               : looseFallbacks;
-        // Probe up to N random candidates from the winning bucket and serve
-        // the first one whose image actually inlines. Broken creatives —
-        // dead DNS (.example TLD from AAO comply fixtures), 404 (Ren
-        // in-memory storage evicted on Fly suspend), wrong content-type —
-        // are silently skipped instead of shown as broken-image icons.
-        // Negative cache in inlineAsDataUrl (5-min TTL) means repeated
-        // probes of the same dead URL are instant, so N=5 is safe.
+        // Probe up to N candidates from the winning bucket and serve the
+        // first one whose image actually inlines. Broken creatives — dead
+        // DNS (.example TLD from AAO comply fixtures), 404 (Ren in-memory
+        // storage evicted on Fly suspend), wrong content-type — are
+        // silently skipped instead of shown as broken-image icons. Negative
+        // cache in inlineAsDataUrl (5-min TTL) means repeated probes of the
+        // same dead URL are instant, so N=5 is safe.
+        //
+        // Ordering: newest N by submitted_at first, then a light random
+        // shuffle over that window so every fresh upload rotates in
+        // immediately (a plain random pick left brand-new creatives at
+        // ~5/bucket-size visibility — operator approves and can't see it).
+        // Older entries dry out naturally as new syncs arrive.
         const MAX_LIVE_SLOT_PROBES = 5;
+        const submittedAtOf = (c: (typeof pickBucket)[number]): number => {
+          const raw = (c as { submitted_at?: string | Date | null }).submitted_at;
+          if (raw instanceof Date) return raw.getTime();
+          if (typeof raw === 'string') {
+            const t = Date.parse(raw);
+            return Number.isFinite(t) ? t : 0;
+          }
+          return 0;
+        };
         const shuffledBucket = [...pickBucket]
-          .sort(() => Math.random() - 0.5)
-          .slice(0, MAX_LIVE_SLOT_PROBES);
+          .sort((a, b) => submittedAtOf(b) - submittedAtOf(a))
+          .slice(0, MAX_LIVE_SLOT_PROBES)
+          .sort(() => Math.random() - 0.5);
         let creative: (typeof pickBucket)[number] | null = null;
         let inlineImageUrl: string | null = null;
         for (const candidate of shuffledBucket) {
