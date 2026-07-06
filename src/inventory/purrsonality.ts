@@ -1732,18 +1732,18 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
 
       const ENCYPHER_VERIFIER_URL = 'https://governance.encypher.seller.example';
 
-      // PROVENANCE_REQUIRED gate — fires ONLY when a SEEDED product
-      // (not a default catalog product) declares
-      // creative_policy.provenance_required: true. AAO 3.1
-      // provenance_enforcement seeds `test-product-disclosure-required`
-      // with that policy and expects the bare-creative submission to
-      // surface PROVENANCE_REQUIRED. Default catalog products also have
-      // the flag but historic 3.0 storyboards (creative_lifecycle,
-      // creative_fate_after_cancellation) submit bare creatives against
-      // them — checking only the seeded fixtures keeps both lanes
-      // green. See mockUpstream.hasSeededProductRequiringProvenance for
-      // the asymmetric-default rationale.
-      if (!provenance && mockUpstream.hasSeededProductRequiringProvenance()) {
+      // PROVENANCE_REQUIRED gate — scope to the AAO comply-runner's canonical
+      // acme-outdoor test kit (operator `pinnacle-agency.example`). Prior
+      // AAO runs routinely leave `test-product-disclosure-required` in the
+      // process-global `seededProducts` map after the compliance run finishes,
+      // and a plain `hasSeededProductRequiringProvenance()` check would then
+      // fire for every external buyer (Abzu demo, Jan Preissner ping via
+      // LinkedIn 2026-07-04) on unrelated syncs. Operator equality lets the
+      // provenance_enforcement storyboard hit its reject_no_provenance
+      // expectation without collateral damage to live buyers.
+      const wireOperator = ((ctx as { input?: { account?: { operator?: string } } }).input?.account?.operator ?? '').toLowerCase();
+      const isAaoTestKit = wireOperator === 'pinnacle-agency.example';
+      if (!provenance && isAaoTestKit && mockUpstream.hasSeededProductRequiringProvenance()) {
         // Still seed the creative so subsequent force_creative_status calls
         // (e.g. 3.1 dependency_impairment's force_replacement_approved on
         // acme_dep_banner_002) find it. The storyboard's
