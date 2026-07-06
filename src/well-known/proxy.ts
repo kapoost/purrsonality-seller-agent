@@ -94,34 +94,94 @@ function pickAudienceTag(assets: Record<string, unknown> | null | undefined): st
  * inline budgets. Returns the raw URL on any fetch failure so we never
  * emit a broken <img> tag.
  */
-const INLINE_ASSET_CACHE = new Map<string, { data: string; at: number }>();
-const INLINE_ASSET_TTL_MS = 10 * 60 * 1000;
+// Cache success (data URL) with a long TTL; cache failure (sentinel
+// `null`) with a short TTL so a broken creative — dead DNS, 404, wrong
+// content-type — doesn't cost 6s per landing-slot request. Landing rotates
+// N candidates; without negative cache, every impression pays timeout
+// worst-case × broken-count. The negative window is short enough that a
+// CDN that recovers self-heals on the next rotation.
+const INLINE_ASSET_CACHE = new Map<string, { data: string | null; at: number }>();
+const INLINE_ASSET_TTL_OK_MS = 10 * 60 * 1000;
+const INLINE_ASSET_TTL_FAIL_MS = 5 * 60 * 1000;
 const INLINE_ASSET_MAX_BYTES = 500 * 1024;
-async function inlineAsDataUrl(url: string): Promise<string> {
-  if (!url || url.startsWith('data:')) return url;
+async function inlineAsDataUrl(url: string): Promise<string | null> {
+  if (!url) return null;
+  if (url.startsWith('data:')) return url;
   const now = Date.now();
   const cached = INLINE_ASSET_CACHE.get(url);
-  if (cached && now - cached.at < INLINE_ASSET_TTL_MS) return cached.data;
+  if (cached) {
+    const ttl = cached.data === null ? INLINE_ASSET_TTL_FAIL_MS : INLINE_ASSET_TTL_OK_MS;
+    if (now - cached.at < ttl) return cached.data;
+  }
+  const remember = (data: string | null): string | null => {
+    INLINE_ASSET_CACHE.set(url, { data, at: now });
+    return data;
+  };
   try {
     const r = await fetch(url, {
       signal: AbortSignal.timeout(6000),
       headers: { accept: 'image/*' },
     });
-    if (!r.ok) return url;
+    if (!r.ok) return remember(null);
     const raw = r.headers.get('content-type') ?? '';
     const contentType = raw.split(';')[0]?.trim() || 'image/png';
     // Guard against text/html error pages served as 200 with the wrong
     // content-type; only image/* is worth inlining.
-    if (!contentType.startsWith('image/')) return url;
+    if (!contentType.startsWith('image/')) return remember(null);
     const buf = new Uint8Array(await r.arrayBuffer());
-    if (buf.byteLength > INLINE_ASSET_MAX_BYTES) return url;
+    if (buf.byteLength === 0) return remember(null);
+    if (buf.byteLength > INLINE_ASSET_MAX_BYTES) return remember(null);
     const b64 = Buffer.from(buf).toString('base64');
-    const dataUrl = `data:${contentType};base64,${b64}`;
-    INLINE_ASSET_CACHE.set(url, { data: dataUrl, at: now });
-    return dataUrl;
+    return remember(`data:${contentType};base64,${b64}`);
   } catch {
-    return url;
+    return remember(null);
   }
+}
+
+// In-process SVG placeholder. Extracted so /live/*-slot can render a
+// fallback without a self-fetch loop through the public host — the loop
+// was adding 6s per broken creative when Fly-proxy routing hiccupped.
+// Keep in sync with GET /generated/agent-creative.svg body below.
+function renderAgentSvg(brand: string, product: string, w: number, h: number): string {
+  const brandEsc = escapeHtmlAttr(brand);
+  const productLabel = product
+    ? product.replace(/^purr_/, '').replace(/_v\d+$/i, '').replace(/_/g, ' ')
+    : 'AdCP creative';
+  const productEsc = escapeHtmlAttr(productLabel);
+  let hash = 0;
+  for (let i = 0; i < brand.length; i++) hash = (hash * 31 + brand.charCodeAt(i)) & 0xffff;
+  const hue = hash % 360;
+  const isLandscape = w / h > 3;
+  const brandFont = Math.round(Math.min(w / (brand.length * 0.55 + 2), h * (isLandscape ? 0.5 : 0.28)));
+  const productFont = Math.max(9, Math.round(brandFont * 0.35));
+  const badgeFont = Math.max(8, Math.round(brandFont * 0.25));
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="${brandEsc} — ${productEsc}">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="hsl(${hue},60%,32%)"/>
+      <stop offset="100%" stop-color="hsl(${(hue + 40) % 360},60%,18%)"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.14)"/>
+      <stop offset="60%" stop-color="rgba(255,255,255,0)"/>
+    </linearGradient>
+  </defs>
+  <rect width="100%" height="100%" fill="url(#bg)"/>
+  <rect width="100%" height="100%" fill="url(#sheen)"/>
+  <g font-family="system-ui,-apple-system,'Segoe UI',sans-serif" fill="#fff">
+    <text x="50%" y="${h * 0.5}" font-size="${brandFont}" font-weight="700" text-anchor="middle" dominant-baseline="middle" letter-spacing="0.02em">${brandEsc}</text>
+    <text x="50%" y="${h * 0.5 + brandFont * 0.85}" font-size="${productFont}" fill="rgba(255,255,255,0.72)" text-anchor="middle" dominant-baseline="middle" letter-spacing="0.06em" text-transform="uppercase">${productEsc}</text>
+  </g>
+  <g transform="translate(${w - 8},${h - 8})" font-family="system-ui,-apple-system,sans-serif" text-anchor="end">
+    <rect x="${-badgeFont * 8}" y="${-badgeFont * 1.6}" width="${badgeFont * 8}" height="${badgeFont * 1.6}" rx="3" fill="rgba(0,0,0,0.35)"/>
+    <text x="${-badgeFont * 0.4}" y="${-badgeFont * 0.4}" font-size="${badgeFont}" fill="rgba(255,255,255,0.85)" letter-spacing="0.08em">AGENT-CRAFTED</text>
+  </g>
+</svg>`;
+}
+
+function svgToDataUrl(svg: string): string {
+  return `data:image/svg+xml;base64,${Buffer.from(svg, 'utf-8').toString('base64')}`;
 }
 
 function escapeHtmlAttr(s: string | undefined | null): string {
@@ -384,44 +444,7 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
         const sizeMatch = sizeParam.match(/^(\d{2,4})x(\d{2,4})$/);
         const w = sizeMatch ? Math.min(2048, Math.max(50, Number(sizeMatch[1]))) : 300;
         const h = sizeMatch ? Math.min(2048, Math.max(30, Number(sizeMatch[2]))) : 250;
-        const brandEsc = escapeHtmlAttr(brand);
-        const productLabel = product
-          ? product.replace(/^purr_/, '').replace(/_v\d+$/i, '').replace(/_/g, ' ')
-          : 'AdCP creative';
-        const productEsc = escapeHtmlAttr(productLabel);
-        // Simple deterministic hue derived from the brand string so the
-        // banner picks a consistent color per advertiser across placements.
-        let hash = 0;
-        for (let i = 0; i < brand.length; i++) hash = (hash * 31 + brand.charCodeAt(i)) & 0xffff;
-        const hue = hash % 360;
-        const isLandscape = w / h > 3;
-        const brandFont = Math.round(Math.min(w / (brand.length * 0.55 + 2), h * (isLandscape ? 0.5 : 0.28)));
-        const productFont = Math.max(9, Math.round(brandFont * 0.35));
-        const badgeFont = Math.max(8, Math.round(brandFont * 0.25));
-        const svg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="${brandEsc} — ${productEsc}">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="hsl(${hue},60%,32%)"/>
-      <stop offset="100%" stop-color="hsl(${(hue + 40) % 360},60%,18%)"/>
-    </linearGradient>
-    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="rgba(255,255,255,0.14)"/>
-      <stop offset="60%" stop-color="rgba(255,255,255,0)"/>
-    </linearGradient>
-  </defs>
-  <rect width="100%" height="100%" fill="url(#bg)"/>
-  <rect width="100%" height="100%" fill="url(#sheen)"/>
-  <g font-family="system-ui,-apple-system,'Segoe UI',sans-serif" fill="#fff">
-    <text x="50%" y="${h * 0.5}" font-size="${brandFont}" font-weight="700" text-anchor="middle" dominant-baseline="middle" letter-spacing="0.02em">${brandEsc}</text>
-    <text x="50%" y="${h * 0.5 + brandFont * 0.85}" font-size="${productFont}" fill="rgba(255,255,255,0.72)" text-anchor="middle" dominant-baseline="middle" letter-spacing="0.06em" text-transform="uppercase">${productEsc}</text>
-  </g>
-  <g transform="translate(${w - 8},${h - 8})" font-family="system-ui,-apple-system,sans-serif" text-anchor="end">
-    <rect x="${-badgeFont * 8}" y="${-badgeFont * 1.6}" width="${badgeFont * 8}" height="${badgeFont * 1.6}" rx="3" fill="rgba(0,0,0,0.35)"/>
-    <text x="${-badgeFont * 0.4}" y="${-badgeFont * 0.4}" font-size="${badgeFont}" fill="rgba(255,255,255,0.85)" letter-spacing="0.08em">AGENT-CRAFTED</text>
-  </g>
-</svg>`;
-        return new Response(svg, {
+        return new Response(renderAgentSvg(brand, product, w, h), {
           status: 200,
           headers: {
             'Content-Type': 'image/svg+xml; charset=utf-8',
@@ -531,9 +554,30 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
             : formatMatches.length > 0
               ? formatMatches
               : looseFallbacks;
-        const creative = pickBucket.length > 0
-          ? pickBucket[Math.floor(Math.random() * pickBucket.length)]!
-          : null;
+        // Probe up to N random candidates from the winning bucket and serve
+        // the first one whose image actually inlines. Broken creatives —
+        // dead DNS (.example TLD from AAO comply fixtures), 404 (Ren
+        // in-memory storage evicted on Fly suspend), wrong content-type —
+        // are silently skipped instead of shown as broken-image icons.
+        // Negative cache in inlineAsDataUrl (5-min TTL) means repeated
+        // probes of the same dead URL are instant, so N=5 is safe.
+        const MAX_LIVE_SLOT_PROBES = 5;
+        const shuffledBucket = [...pickBucket]
+          .sort(() => Math.random() - 0.5)
+          .slice(0, MAX_LIVE_SLOT_PROBES);
+        let creative: (typeof pickBucket)[number] | null = null;
+        let inlineImageUrl: string | null = null;
+        for (const candidate of shuffledBucket) {
+          const cAssets = (candidate.assets ?? {}) as Record<string, unknown>;
+          const cImageUrl = pickAssetUrl(cAssets['image']);
+          const dataUrl = await inlineAsDataUrl(cImageUrl);
+          if (dataUrl) {
+            creative = candidate;
+            inlineImageUrl = dataUrl;
+            break;
+          }
+        }
+
         // Attribution reads from the persistent creatives.assigned_media_
         // buy_id column (populated by update_media_buy). Falls back to the
         // in-memory order lookup only for legacy creatives from before the
@@ -545,18 +589,21 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
               ?? fallbackMediaBuyId)
           : fallbackMediaBuyId;
 
-        const isAdcp = creative != null;
-        const badgeLabel = isAdcp ? 'AdCP protocol' : 'generic campaign';
-        const badgeColor = isAdcp ? '#7c3aed' : '#525252';
+        // Badge stays "AdCP protocol" whenever the bucket had any AdCP
+        // candidates — even if all of them were broken and we're serving
+        // the in-process SVG placeholder. The badge advertises the routing
+        // path, not asset health; "generic campaign" is reserved for the
+        // no-AdCP-creative-in-DB case.
+        const bucketHadAdcp = pickBucket.length > 0;
+        const badgeLabel = bucketHadAdcp ? 'AdCP protocol' : 'generic campaign';
+        const badgeColor = bucketHadAdcp ? '#7c3aed' : '#525252';
 
-        let imageUrl: string;
         let altText: string;
         let clickHref: string;
         let creativeIdForLog: string;
 
-        if (creative) {
+        if (creative && inlineImageUrl) {
           const assets = (creative.assets ?? {}) as Record<string, unknown>;
-          imageUrl = pickAssetUrl(assets['image']);
           altText =
             pickAssetField(assets['image'], 'alt_text') ??
             creative.name ??
@@ -564,8 +611,23 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
             '';
           clickHref = `/click/live-${placement}-slot?creative_id=${encodeURIComponent(creative.creative_id)}`;
           creativeIdForLog = creative.creative_id;
+        } else if (bucketHadAdcp) {
+          // Bucket had candidates but every image failed to inline (dead
+          // DNS / 404 / wrong CT). Render the in-process SVG placeholder
+          // so the AdCP badge lights up on something branded instead of
+          // a broken-image icon or empty box.
+          const [w, h] = placementFormatId.replace('display_', '').split('x').map(Number);
+          inlineImageUrl = svgToDataUrl(
+            renderAgentSvg('Purrsonality', productId, w ?? 300, h ?? 250),
+          );
+          altText = 'Purrsonality — AdCP slot';
+          clickHref = 'https://purrsonality.rocketscience.pl/';
+          creativeIdForLog = `adcp-placeholder-${placement}`;
         } else {
-          imageUrl = 'https://purrsonality.pages.dev/og/default.png';
+          // No AdCP creative in bucket at all — house-generic path. The
+          // OG image is a stable public asset on the marketing site.
+          const houseUrl = 'https://purrsonality.pages.dev/og/default.png';
+          inlineImageUrl = (await inlineAsDataUrl(houseUrl)) ?? houseUrl;
           altText = 'Purrsonality — discover your cat persona';
           clickHref = 'https://purrsonality.rocketscience.pl/';
           creativeIdForLog = `house-generic-${placement}`;
@@ -579,21 +641,6 @@ export function startWellKnownProxy(opts: ProxyOptions): void {
           user_agent: req.headers.get('user-agent'),
           referrer: req.headers.get('referer'),
         });
-
-        // Inline the image bytes into the HTML so content blockers can't
-        // filter it on network fetch. See inlineAsDataUrl above for the
-        // full rationale + cache + size guard.
-        let inlineImageUrl = await inlineAsDataUrl(imageUrl);
-        // Fall back to the seller-hosted agent SVG when the source URL
-        // failed (inlineAsDataUrl returns the raw URL on any 4xx/5xx).
-        // Common cause: a Ren-generated asset whose in-memory host
-        // evicted the bytes on Fly-suspend. Serving the placeholder from
-        // the same origin means the buyer always sees SOMETHING branded
-        // instead of a broken-image icon.
-        if (inlineImageUrl === imageUrl && !imageUrl.startsWith('data:')) {
-          const fallbackSvgUrl = `${url.origin}/generated/agent-creative.svg?brand=${encodeURIComponent(placement)}&product=${encodeURIComponent(productId)}&size=${placementFormatId.replace('display_', '')}`;
-          inlineImageUrl = await inlineAsDataUrl(fallbackSvgUrl);
-        }
 
         // The image must fit inside the iframe's declared frame regardless
         // of its intrinsic aspect ratio — falls back to default.png which
