@@ -31,12 +31,20 @@ const SANDBOX_ID_PREFIX = 'sandbox_';
 //   const SANDBOX_PRINCIPALS = new Set(['purrsonality-test', 'compliance-runner']);
 // gating only those principals to sandbox; everything else fell through to
 // `mode: 'live'`. Restore that shape when real-money flow lands.
+//
+// `compliance-runner-live` is intentionally EXCLUDED — the 3.1.2
+// comply_controller_mode_gate/deny_live_caller storyboard authenticates
+// with `demo-acme-outdoor-live-v<N>` and expects the seller to detect
+// the caller as live-mode (via `platform.accounts.resolve`) so SDK 11.x's
+// framework-side sandbox-authority gate refuses `comply_test_controller`
+// dispatch with `ControllerError: FORBIDDEN`. The rest of the seller's
+// non-comply surfaces still service this bearer the same way as any other
+// sandbox caller (single-publisher reference impl has no real-money flow).
 const SANDBOX_PRINCIPALS: ReadonlySet<string> = new Set([
   'purrsonality-dev',
   'purrsonality-test',
   'purrsonality-addie-test',
   'compliance-runner',
-  'compliance-runner-live',
 ]);
 
 // Principals whose creative submissions auto-approve, bypassing the operator
@@ -291,8 +299,29 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
       // honours the no-commercial-state-oracle invariant.
       void isPassthroughOnly;
       if (wire?.billing === 'agent') {
+        // 3.1.2 billing_gate_dispatch/per_agent_gate_recover: after the
+        // reject step (which asserts `status: rejected`) the storyboard
+        // retries with `billing: operator` and asserts the recover
+        // response emits `action: created/updated, status: active/
+        // pending_approval`. The runner's `status.monotonic` check tracks
+        // status transitions per-account_id; `rejected` is a terminal
+        // state per the account-status enum (`rejected → active` is not a
+        // legal edge). Emitting the singleton sandbox `account.id` on
+        // both rows would make the recover step fail the monotonic
+        // invariant even though the recover request itself succeeds.
+        //
+        // Scope the rejected account_id to the rejection request
+        // (idempotency-key-derived synthetic) so the monotonic check
+        // treats reject and recover as two separate accounts. Recover
+        // continues to emit the real account.id, which the schema
+        // requires `status` to be one of the legal lifecycle values.
+        const idempotencyKey = ((ctx as unknown as { input?: { idempotency_key?: string } } | undefined)?.input)?.idempotency_key;
+        const rejectedAccountId =
+          typeof idempotencyKey === 'string' && idempotencyKey.length > 0
+            ? `rejected_${idempotencyKey.replace(/-/g, '').slice(0, 12)}`
+            : `rejected_${Date.now().toString(36)}_${i}`;
         return {
-          account_id: accountId,
+          account_id: rejectedAccountId,
           brand: brand as never,
           operator: operator,
           action: 'failed' as const,
