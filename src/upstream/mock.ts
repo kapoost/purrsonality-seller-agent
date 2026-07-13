@@ -333,11 +333,23 @@ export const mockUpstream = {
   listSeededFormats(accountId?: string): Array<Record<string, unknown>> {
     const all = [...seededFormats.values()];
     if (!accountId) return all;
-    // Strict account scoping when caller is account-bound, matching the
-    // creatives policy. pagination_integrity_creative_formats seeds 2 formats
-    // under a dedicated account and asserts total_count=2 — leaks from other
-    // storyboards' format seeds (or built-ins) would break the assertion.
-    return all.filter((f) => f['_account_id'] === accountId);
+    // SDK 11.x storyboard runner strips `account.account_id` from
+    // `comply_test_controller` requests (canonicalizes to test-kit brand/
+    // operator refs), so seeds land with `_account_id: undefined` even
+    // when the storyboard's `sample_request` declares an explicit ID.
+    // The follow-up `list_creative_formats` still ships `account.account_id`
+    // verbatim, so strict `_account_id === accountId` filtering finds
+    // nothing and `pagination_integrity_creative_formats/first_page`
+    // asserts `has_more:true` against an empty result.
+    //
+    // Return globally-seeded formats (`_account_id: undefined`) plus
+    // account-scoped ones. `name_search` in the adapter narrows to the
+    // storyboard's declared name prefix; unique `format_id`s across
+    // storyboards keep total_count assertions stable.
+    return all.filter((f) => {
+      const seededAccountId = f['_account_id'];
+      return seededAccountId === accountId || seededAccountId == null;
+    });
   },
 
   setCreateMediaBuyDirective(accountId: string, directive: CreateMediaBuyDirective): void {
