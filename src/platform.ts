@@ -21,7 +21,7 @@ export const platform = definePlatform<null, PurrAccountMeta>({
     // when SDK 9.x lands per-account `required_for` predicates (mira's option
     // B from the humanMCP panel 2026-06-19) so live accounts require signing
     // and sandbox accounts (= AAO runner) skip the gate.
-    specialisms: ['sales-non-guaranteed', 'sales-proposal-mode'] as const,
+    specialisms: ['sales-non-guaranteed'] as const,
     channels: ['display'] as const,
     pricingModels: ['cpm'] as const,
     // Accept both `agent` and `operator` billing on sync_accounts. AAO comply
