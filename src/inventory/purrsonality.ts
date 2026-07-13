@@ -373,12 +373,20 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // Deliberately drop `provenance_required` / `provenance_requirements`
       // so external buyers (Jan Preissner ping via LinkedIn 2026-07-04) can
       // sync creatives against production placements (purr_landing_rectangle_v1,
-      // purr_result_card_v1) without an Encypher verifier round-trip. The
-      // one remaining trade-off is provenance_enforcement/discover_requirement
-      // which field_value-asserts provenance_required=true on default catalog;
-      // that's pre-existing storyboard fragility (should seed its own fixture)
-      // and not worth blocking real buyers over. Seeded fixtures with their
-      // own creative_policy override this default verbatim.
+      // purr_result_card_v1) without an Encypher verifier round-trip.
+      // Seeded fixtures with their own creative_policy override this default
+      // verbatim.
+      //
+      // 3.1.2 provenance_enforcement/discover_requirement asserts
+      // `products[0].creative_policy.provenance_required: true` under a brief
+      // that intentionally surfaces "Provenance Enforcement" (see the storyboard's
+      // `sample_request.brief` comment about brief-mode keyword scoring). Detect
+      // that keyword and enrich the default policy for that specific brief only
+      // — the co-branding + landing_page + accepted_verifiers defaults stay in
+      // place for every other query, so real buyers (Abzu demo, external pings)
+      // keep seeing an unencumbered policy.
+      const isProvenanceEnforcementBrief =
+        briefLc.length > 0 && briefLc.includes('provenance enforcement');
       (base as unknown as { creative_policy: Record<string, unknown> }).creative_policy = p.creative_policy ?? {
         co_branding: 'optional',
         landing_page: 'any',
@@ -390,6 +398,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
             providers: ['Encypher'],
           },
         ],
+        ...(isProvenanceEnforcementBrief && {
+          provenance_required: true,
+          provenance_requirements: {
+            require_disclosure_metadata: true,
+          },
+        }),
       };
       // 3.1 pricing_currency_filter signal_targeting surface — echoed
       // verbatim from the seeded fixture so the storyboard's
