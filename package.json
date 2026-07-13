@@ -12,7 +12,7 @@
     "postinstall": "sh scripts/postinstall.sh"
   },
   "dependencies": {
-    "@adcp/sdk": "9.7.0",
+    "@adcp/sdk": "11.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/pg": "^8.20.0",
     "pg": "^8.21.0",
