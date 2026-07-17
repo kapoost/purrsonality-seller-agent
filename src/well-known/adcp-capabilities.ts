@@ -19,7 +19,14 @@ export function buildAdcpCapabilities(
   opts: AdcpCapabilitiesOptions,
 ): Record<string, unknown> {
   return {
-    adcp_version: '3.0',
+    // Badge-eligible target we advertise for AAO discovery. Mirror
+    // platform.supported_versions below so AAO's resolver sees the full
+    // envelope-shape matrix we speak — hardcoded `3.0` here previously
+    // pinned AAO badge-target to 3.0 even though the SDK emits 3.1
+    // through the tool path (regressed the 3.1 badge earned on SDK
+    // 9.6.2, 2026-07-02).
+    adcp_version: '3.1',
+    supported_versions: [...(platform.capabilities.supported_versions ?? [])],
     agent: {
       name: opts.agentName,
       url: opts.agentUrl,
