@@ -2,6 +2,8 @@ import {
   createIdempotencyStore,
   memoryBackend,
   InMemoryStateStore,
+  InMemoryTaskStore,
+  PostgresTaskStore,
   createMediaBuyStore,
   createInMemoryTaskRegistry,
   createPostgresTaskRegistry,
@@ -38,6 +40,16 @@ export const mediaBuyStore = createMediaBuyStore({ store: stateStore });
 export const taskRegistry = usingPostgres
   ? createPostgresTaskRegistry({ pool: pgDb! })
   : createInMemoryTaskRegistry();
+
+// MCP protocol-level TaskStore (create/poll/complete lifecycle used by
+// `comply_test_controller` scenarios that return a task_id and expect
+// `tasks_get` to resolve after Fly suspend/wake). SDK default is
+// InMemoryTaskStore which zeroes on every process restart — that ate
+// AAO's deterministic_creative "Force creative to approved" step whenever
+// Fly bounced the machine mid-poll. Postgres backing outlives suspends.
+export const taskStore = usingPostgres
+  ? new PostgresTaskStore(pgDb!)
+  : new InMemoryTaskStore();
 
 // Deterministic task_id collision dropper for the AAO comply runner.
 // `media_buy_seller/create_media_buy_async/submitted_arm_response` registers

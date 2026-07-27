@@ -16,7 +16,7 @@ import { mockUpstream } from './upstream/mock.ts';
 // signed-requests specialism declaration; the keys + capability
 // signalling stay so opt-in signing buyers can still discover us.
 import { seedDemoCreative } from './seed/demo-creative.ts';
-import { idempotencyStore, mediaBuyStore, stateStore, taskRegistry, wipePersistentTestState } from './stores/index.ts';
+import { idempotencyStore, mediaBuyStore, stateStore, taskRegistry, taskStore, wipePersistentTestState } from './stores/index.ts';
 import { buildAdcpCapabilities, buildOAuthProtectedResource } from './well-known/adcp-capabilities.ts';
 import { buildAgentCard } from './well-known/agent-card.ts';
 import { startWellKnownProxy } from './well-known/proxy.ts';
@@ -135,6 +135,12 @@ serve(
     }),
   {
     port: sdkPort,
+    // Override SDK's default InMemoryTaskStore with our Postgres-backed store
+    // (see stores/index.ts). Without this, MCP Task lifecycle (comply_test_controller
+    // `force_creative_status` → task_id → tasks_get poll) dies whenever Fly's
+    // auto_stop_machines=suspend bounces the machine mid-poll — AAO surfaces
+    // that as `deterministic_creative/Force creative to approved: Task failed`.
+    taskStore,
     // Start the public proxy ONLY after the SDK is ready to receive forwarded
     // requests. Without this, proxy boots first and any request that arrives
     // during the ~50–200ms gap before SDK listen() returns gets a 502 from the

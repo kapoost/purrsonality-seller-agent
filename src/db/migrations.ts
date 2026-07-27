@@ -1,7 +1,7 @@
 import {
   getAllAdcpMigrations,
 } from '@adcp/sdk/server';
-import { ADCP_STATE_MIGRATION } from '@adcp/sdk/server';
+import { ADCP_STATE_MIGRATION, MCP_TASKS_MIGRATION } from '@adcp/sdk/server';
 import { REPLAY_CACHE_MIGRATION } from '@adcp/sdk/signing/server';
 import { getPool } from './pool.ts';
 
@@ -109,6 +109,13 @@ export async function runMigrations(): Promise<void> {
   console.log('[db] Running AdCP SDK migrations...');
   await pool.query(getAllAdcpMigrations());
   await pool.query(ADCP_STATE_MIGRATION);
+  // MCP_TASKS_MIGRATION backs the framework-level TaskStore (MCP Task lifecycle
+  // — create/poll/complete). SDK's `getAllAdcpMigrations()` covers the AdCP
+  // decisioning task registry but NOT the MCP protocol task store, so the
+  // default InMemoryTaskStore ate every deterministic_creative run through a
+  // Fly suspend/wake. Own table so seller.serve({ taskStore: new PostgresTaskStore(...) })
+  // survives restarts.
+  await pool.query(MCP_TASKS_MIGRATION);
   await pool.query(REPLAY_CACHE_MIGRATION);
   await pool.query(METRICS_EVENTS_MIGRATION);
   await pool.query(CREATIVES_MIGRATION);
