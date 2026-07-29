@@ -21,9 +21,13 @@ export const ordersStore = {
    * down the hot path. */
   persist(order: MockOrder | undefined | null): void {
     if (!order) return;
-    const pool = getPool();
-    if (!pool) return;
+    if (!getPool()) return;
     void withRetry(async () => {
+      // Re-resolve inside the retry closure — withRetry calls pool.end() on
+      // the first failure, so a captured outer reference would hit "Cannot
+      // use a pool after calling end on the pool" on retry.
+      const pool = getPool();
+      if (!pool) return;
       await pool.query(
         `INSERT INTO mock_orders (order_id, network_code, data, updated_at)
          VALUES ($1, $2, $3, NOW())
@@ -41,9 +45,10 @@ export const ordersStore = {
   /* Delete a snapshot when the caller has just removed the order from
    * memory. Same fire-and-forget semantics. */
   purge(orderId: string): void {
-    const pool = getPool();
-    if (!pool) return;
+    if (!getPool()) return;
     void withRetry(async () => {
+      const pool = getPool();
+      if (!pool) return;
       await pool.query(`DELETE FROM mock_orders WHERE order_id = $1`, [orderId]);
     }).catch((err) => {
       console.log('[orders-store] purge failed:', err instanceof Error ? err.message : String(err));
@@ -54,11 +59,14 @@ export const ordersStore = {
    * once from index.ts before Bun.serve starts, so by the time the first
    * request lands the in-memory registry is populated. */
   async hydrate(target: Map<string, MockOrder>): Promise<number> {
-    const pool = getPool();
-    if (!pool) return 0;
-    const res = await withRetry(async () => pool.query<{ order_id: string; data: MockOrder }>(
-      `SELECT order_id, data FROM mock_orders ORDER BY updated_at ASC`,
-    ));
+    if (!getPool()) return 0;
+    const res = await withRetry(async () => {
+      const pool = getPool();
+      if (!pool) throw new Error('pool unavailable');
+      return pool.query<{ order_id: string; data: MockOrder }>(
+        `SELECT order_id, data FROM mock_orders ORDER BY updated_at ASC`,
+      );
+    });
     let count = 0;
     for (const row of res.rows) {
       target.set(row.order_id, row.data);
