@@ -22,6 +22,7 @@ import {
   type SyncCreativesRow,
 } from '@adcp/sdk/server';
 import { FormatAsset } from '@adcp/sdk';
+import { canonicalDeclarationFromBareId } from '@adcp/sdk/v2/projection';
 import type {
   GetProductsRequest,
   CreateMediaBuyRequest,
@@ -305,26 +306,33 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         : (p.pricing_kind === 'floor'
           ? { model: 'cpm' as const, floor: p.min_cpm, currency: p.currency, pricing_option_id: p.pricing_option_id }
           : { model: 'cpm' as const, fixed: p.min_cpm, currency: p.currency, ...(p.pricing_option_id && { pricing_option_id: p.pricing_option_id }) });
-      // 3.1 canonical_formats — when the fixture seeded format_id_refs with
-      // an external agent_url (e.g. https://creative.adcontextprotocol.org/),
-      // pass the structured shape WITHOUT the agentUrl shortcut so each
-      // format keeps its own agent_url. Otherwise emit through the
-      // single-agent shortcut for our own format catalog. For v2-only
-      // products (format_options only, no format_ids), pass a placeholder
-      // so buildProduct accepts the call; the format_ids field is deleted
-      // from the response shape below.
+      // 3.1 canonical_formats — buildProduct now takes canonical
+      // format_options directly. We resolve every legacy bare id via
+      // canonicalDeclarationFromBareId (SDK helper that owns the id→canonical
+      // mapping for the AAO catalog and any registered adopter catalog).
+      // Anything the resolver can't map is silently dropped; when the
+      // resulting set is empty we synthesise a single 300x250 image
+      // placeholder so buildProduct's NonEmptyCanonicalFormatDeclarations
+      // constraint holds and the response shape stays sensible.
       const useFormatRefs = p.format_id_refs && p.format_id_refs.length > 0;
-      const isV2Only = !!(p.format_options && p.format_options.length > 0
-        && p.format_ids.length === 0
-        && !useFormatRefs);
+      const declaredIds = useFormatRefs
+        ? p.format_id_refs!.map((f) => f.id)
+        : [...p.format_ids];
+      const resolvedDecls = declaredIds
+        .map((id) => canonicalDeclarationFromBareId(id))
+        .filter((d): d is NonNullable<typeof d> => d != null);
+      const formatOptions = resolvedDecls.length > 0
+        ? resolvedDecls
+        : [{
+            format_option_id: 'display_300x250',
+            format_kind: 'image' as const,
+            params: { width: 300, height: 250 },
+          }];
       const base = buildProduct({
         id: p.product_id,
         name: p.name,
         description: p.description,
-        formats: useFormatRefs
-          ? p.format_id_refs!.map((f) => ({ id: f.id, agent_url: f.agent_url }))
-          : (isV2Only ? ['display_300x250'] : [...p.format_ids]),
-        ...(useFormatRefs ? {} : { agentUrl: FORMAT_AGENT_URL }),
+        format_options: formatOptions as Parameters<typeof buildProduct>[0]['format_options'],
         delivery_type: 'non_guaranteed',
         pricing,
         publisher_domain: PUBLISHER.adcp_publisher,
@@ -428,7 +436,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // v2-only path: fixture seeded format_options[] and explicitly
       // empty format_ids[]. Storyboard asserts `field_absent: format_ids`
       // — delete the property so the response shape advertises the
-      // canonical-only declaration.
+      // canonical-only declaration. Under SDK 13.x buildProduct is already
+      // canonical, so format_ids is absent by default; this handles fixtures
+      // that force a v2-only shape after we backfill it above.
+      const isV2Only = !!(p.format_options && p.format_options.length > 0
+        && p.format_ids.length === 0
+        && !useFormatRefs);
       if (isV2Only) {
         delete (base as unknown as { format_ids?: unknown }).format_ids;
       }
@@ -453,11 +466,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         forProposalId ??
         `prop_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}${suffix}`;
       const evenPct = Math.floor(100 / products.length);
-      const allocations = products.map((p, i) => ({
-        product_id: p.product_id,
-        allocation_percentage: i === 0 ? 100 - evenPct * (products.length - 1) : evenPct,
-        pricing_option_id: p.pricing_options?.[0]?.pricing_option_id,
-      }));
+      const allocations = products.map((p, i) => {
+        const po = (p as { pricing_options?: ReadonlyArray<{ pricing_option_id?: string }> }).pricing_options;
+        return {
+          product_id: p.product_id,
+          allocation_percentage: i === 0 ? 100 - evenPct * (products.length - 1) : evenPct,
+          pricing_option_id: po?.[0]?.pricing_option_id,
+        };
+      });
       // Track every emitted proposal so subsequent refine/create can
       // distinguish PROPOSAL_NOT_FOUND from a known proposal — PR #4942.
       mockUpstream.emitProposal(proposalId);
@@ -1508,9 +1524,9 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     return response as unknown as GetMediaBuysResponse;
   },
 
-  async listCreativeFormats(
+  async listCreativeFormatsLegacy(
     req: ListCreativeFormatsRequest,
-    _ctx,
+    _ctx: Parameters<NonNullable<Parameters<typeof defineSalesPlatform>[0]['listCreativeFormatsLegacy']>>[1],
   ) {
     const r = (req ?? {}) as {
       pagination?: { max_results?: number; cursor?: string };
