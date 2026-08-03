@@ -320,7 +320,17 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         : [...p.format_ids];
       const resolvedDecls = declaredIds
         .map((id) => canonicalDeclarationFromBareId(id))
-        .filter((d): d is NonNullable<typeof d> => d != null);
+        .filter((d): d is NonNullable<typeof d> => d != null)
+        // canonicalDeclarationFromBareId attaches `v1_format_ref` for
+        // round-trip semantics, but buildProduct in 13.0.0-rc.5 explicitly
+        // rejects declarations that carry a legacy creative identity
+        // ("format_options[i].v1_format_ref contains legacy creative identity").
+        // Strip it — we don't need the round-trip since our legacy_format_id
+        // shim below re-emits format_ids for buyers that still expect them.
+        .map((d) => {
+          const { v1_format_ref: _v1Ref, ...clean } = d as unknown as { v1_format_ref?: unknown; [k: string]: unknown };
+          return clean as unknown as typeof d;
+        });
       const formatOptions = resolvedDecls.length > 0
         ? resolvedDecls
         : [{
