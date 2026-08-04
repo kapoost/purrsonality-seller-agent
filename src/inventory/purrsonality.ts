@@ -318,19 +318,20 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       const declaredIds = useFormatRefs
         ? p.format_id_refs!.map((f) => f.id)
         : [...p.format_ids];
-      const resolvedDecls = declaredIds
+      // Two-copy dance for canonical_formats storyboards. buildProduct in
+      // 13.0.0-rc.5 rejects declarations with `v1_format_ref` on input
+      // ("format_options[i].v1_format_ref contains legacy creative identity"),
+      // but the canonical_product_discovery storyboard asserts that
+      // format_options[i].v1_format_ref[0] links back to the AAO catalog
+      // format_id. Feed buildProduct the stripped copy, keep the enriched
+      // copy for the post-processing override below.
+      const enrichedDecls = declaredIds
         .map((id) => canonicalDeclarationFromBareId(id))
-        .filter((d): d is NonNullable<typeof d> => d != null)
-        // canonicalDeclarationFromBareId attaches `v1_format_ref` for
-        // round-trip semantics, but buildProduct in 13.0.0-rc.5 explicitly
-        // rejects declarations that carry a legacy creative identity
-        // ("format_options[i].v1_format_ref contains legacy creative identity").
-        // Strip it — we don't need the round-trip since our legacy_format_id
-        // shim below re-emits format_ids for buyers that still expect them.
-        .map((d) => {
-          const { v1_format_ref: _v1Ref, ...clean } = d as unknown as { v1_format_ref?: unknown; [k: string]: unknown };
-          return clean as unknown as typeof d;
-        });
+        .filter((d): d is NonNullable<typeof d> => d != null);
+      const resolvedDecls = enrichedDecls.map((d) => {
+        const { v1_format_ref: _v1Ref, ...clean } = d as unknown as { v1_format_ref?: unknown; [k: string]: unknown };
+        return clean as unknown as typeof d;
+      });
       const formatOptions = resolvedDecls.length > 0
         ? resolvedDecls
         : [{
@@ -365,7 +366,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
             ? ['impressions', 'spend', 'clicks', 'views', 'completed_views', 'completion_rate']
             : ['impressions', 'spend', 'clicks'],
           date_range_support: 'date_range',
-          vendor_metrics: [
+          // Seeded fixtures (comply_test_controller) override the default
+          // attention-vendor metric so canonical_formats storyboards can
+          // isolate the seeded product via
+          // filters.required_vendor_metrics — assertion path is
+          // `products[0].reporting_capabilities.vendor_metrics[0].vendor.domain`.
+          vendor_metrics: p.vendor_metrics ?? [
             {
               vendor: { domain: 'attentionvendor.example' },
               metric_id: 'attention_score',
@@ -442,6 +448,11 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // products via filters.required_vendor_metrics matching these.
       if (p.format_options) {
         (base as unknown as { format_options: unknown }).format_options = p.format_options;
+      } else if (enrichedDecls.length > 0) {
+        // No fixture override — restore the v1_format_ref that we stripped
+        // before buildProduct so canonical_product_discovery's field_value
+        // check on format_options[0].v1_format_ref[0].agent_url passes.
+        (base as unknown as { format_options: unknown }).format_options = enrichedDecls;
       }
       // v2-only path: fixture seeded format_options[] and explicitly
       // empty format_ids[]. Storyboard asserts `field_absent: format_ids`
@@ -452,6 +463,23 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       const isV2Only = !!(p.format_options && p.format_options.length > 0
         && p.format_ids.length === 0
         && !useFormatRefs);
+      // 3.1 canonical dual-emission: buildProduct's canonical wire output
+      // strips format_ids (`CanonicalProduct.format_ids?: never`), but the
+      // canonical_product_discovery storyboard asserts field_value on
+      // `products[0].format_ids[0].agent_url` and `.id`. Reattach the
+      // structured legacy refs so both surfaces coexist in the response.
+      // Skip when the fixture explicitly seeded an empty format_ids[] —
+      // that's the v2-only path where field_absent is the assertion.
+      if (!isV2Only) {
+        const legacyRefs = (p.format_id_refs && p.format_id_refs.length > 0)
+          ? p.format_id_refs
+          : (p.format_ids && p.format_ids.length > 0)
+            ? p.format_ids.map((id) => ({ agent_url: FORMAT_AGENT_URL, id }))
+            : undefined;
+        if (legacyRefs && legacyRefs.length > 0) {
+          (base as unknown as { format_ids: unknown }).format_ids = legacyRefs;
+        }
+      }
       if (isV2Only) {
         delete (base as unknown as { format_ids?: unknown }).format_ids;
       }

@@ -75,6 +75,18 @@ export const platform = definePlatform<null, PurrAccountMeta>({
         'seed_media_buy',
       ] as const,
     },
+    // 3.1 canonical_formats storyboards fire get_products with
+    // buying_mode=wholesale. The SDK auto-derives buying_modes as
+    // ["brief"] (never "wholesale") — AAO then classifies every
+    // wholesale storyboard as `not_applicable` and Product Discovery
+    // track collapses to SKIP. Declare wholesale explicitly here;
+    // getProducts already handles wholesale requests by returning the
+    // seeded catalog without brief-mode ranking.
+    overrides: {
+      media_buy: {
+        buying_modes: ['brief', 'wholesale'] as const,
+      },
+    },
   },
   accounts: accountStore,
   sales,
