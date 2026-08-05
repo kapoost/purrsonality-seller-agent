@@ -2120,7 +2120,14 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     // letting it win would bury just-re-synced creatives behind older state
     // and break creative_lifecycle/list_and_filter's `creatives[0] ==
     // synced_creative_id` check.
-    const raw = mockUpstream.listCreatives(ctx.account?.id);
+    // When the wire request is scoped to a synthetic test account
+    // (acct_pagination_integrity et al.), seed_creative stamped
+    // `_account_id: acct_<suffix>` from the wire, but ctx.account.id is
+    // the resolved principal account — the two don't match, so a
+    // strict-scope query returns 0 and pagination_integrity/pagination_walk
+    // fails the `total_matching=3` assertion. Fetch unscoped in that case
+    // and let the test-scope suffix filter below narrow to the seeded set.
+    const raw = mockUpstream.listCreatives(testScopeSuffix !== null ? undefined : ctx.account?.id);
     const mockIds = new Set(raw.map((c) => (c as { creative_id?: string }).creative_id ?? ''));
     const nowIso = new Date().toISOString();
     const fromMock: ListRow[] = raw
