@@ -326,7 +326,18 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // format_id. Feed buildProduct the stripped copy, keep the enriched
       // copy for the post-processing override below.
       const enrichedDecls = declaredIds
-        .map((id) => canonicalDeclarationFromBareId(id))
+        .map((id) => {
+          const decl = canonicalDeclarationFromBareId(id);
+          if (decl == null) return null;
+          // Attach a synthetic format_option_id — SDK 13.0.0-rc.7 rejects
+          // declarations without one as "legacy shape" (canonical wire
+          // requires it since schema 3.1.10). The bare id itself is a
+          // stable, unique identifier here.
+          return {
+            format_option_id: id,
+            ...decl,
+          };
+        })
         .filter((d): d is NonNullable<typeof d> => d != null);
       const resolvedDecls = enrichedDecls.map((d) => {
         const { v1_format_ref: _v1Ref, ...clean } = d as unknown as { v1_format_ref?: unknown; [k: string]: unknown };
@@ -446,13 +457,15 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // (canonical v2), publisher_properties[], delivery_type, and
       // overrides vendor_metrics when seeded. Storyboards isolate seeded
       // products via filters.required_vendor_metrics matching these.
+      // For native (non-seeded) products, buildProduct already produced a
+      // canonical-valid format_options from resolvedDecls (v1_format_ref
+      // stripped). Restoring enrichedDecls here would put v1_format_ref
+      // back — SDK 13.0.0-rc.7 hard-rejects that on the response with
+      // `INVALID_REQUEST: get_products returned a legacy format that
+      // cannot be represented canonically`. rc.5 silently stripped; rc.7
+      // fails closed.
       if (p.format_options) {
         (base as unknown as { format_options: unknown }).format_options = p.format_options;
-      } else if (enrichedDecls.length > 0) {
-        // No fixture override — restore the v1_format_ref that we stripped
-        // before buildProduct so canonical_product_discovery's field_value
-        // check on format_options[0].v1_format_ref[0].agent_url passes.
-        (base as unknown as { format_options: unknown }).format_options = enrichedDecls;
       }
       // v2-only path: fixture seeded format_options[] and explicitly
       // empty format_ids[]. Storyboard asserts `field_absent: format_ids`
@@ -463,26 +476,17 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       const isV2Only = !!(p.format_options && p.format_options.length > 0
         && p.format_ids.length === 0
         && !useFormatRefs);
-      // 3.1 canonical dual-emission: buildProduct's canonical wire output
-      // strips format_ids (`CanonicalProduct.format_ids?: never`), but the
-      // canonical_product_discovery storyboard asserts field_value on
-      // `products[0].format_ids[0].agent_url` and `.id`. Reattach the
-      // structured legacy refs so both surfaces coexist in the response.
-      // Skip when the fixture explicitly seeded an empty format_ids[] —
-      // that's the v2-only path where field_absent is the assertion.
-      if (!isV2Only) {
-        const legacyRefs = (p.format_id_refs && p.format_id_refs.length > 0)
-          ? p.format_id_refs
-          : (p.format_ids && p.format_ids.length > 0)
-            ? p.format_ids.map((id) => ({ agent_url: FORMAT_AGENT_URL, id }))
-            : undefined;
-        if (legacyRefs && legacyRefs.length > 0) {
-          (base as unknown as { format_ids: unknown }).format_ids = legacyRefs;
-        }
-      }
       if (isV2Only) {
         delete (base as unknown as { format_ids?: unknown }).format_ids;
       }
+      // NOTE: no dual-emission `format_ids` reattach — SDK 13.0.0-rc.7's
+      // toCanonicalOnlyProduct enforces `v1_format_ref` coverage on every
+      // format_id, and attaching format_ids here without matching
+      // v1_format_ref in format_options[] triggers
+      // LEGACY_FORMAT_ID_DROPPED_UNMAPPED and fails the response with
+      // INVALID_REQUEST. The canonical_product_discovery storyboard's
+      // dual-emission assertion is spec-side unresolvable — tracked at
+      // adcp#6227.
       if (p.publisher_properties) {
         (base as unknown as { publisher_properties: unknown }).publisher_properties = p.publisher_properties;
       }
