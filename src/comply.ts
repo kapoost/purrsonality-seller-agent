@@ -397,7 +397,14 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
     // with a nonexistent creative_id — we surface NOT_FOUND so the SDK wraps
     // it as the spec-required ControllerError.
     creative_status: async (params) => {
-      if (!mockUpstream.hasCreative(params.creative_id)) {
+      const has = mockUpstream.hasCreative(params.creative_id);
+      log.info('force_creative_status invoked', {
+        creative_id: params.creative_id,
+        target_status: params.status,
+        rejection_reason: params.rejection_reason,
+        found_in_mock: has,
+      });
+      if (!has) {
         throw new TestControllerError(
           'NOT_FOUND',
           `Creative ${params.creative_id} not found`,
