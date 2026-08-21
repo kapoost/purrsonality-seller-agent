@@ -180,18 +180,18 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
       } as unknown as Account<PurrAccountMeta>;
     });
     const items = [primaryWithConfigs, ...sandbox];
-    const filterAny = filter as {
-      sandbox?: boolean;
-      account?: { account_id?: string };
-      pagination?: { max_results?: number; cursor?: string };
-    } | undefined;
+    // SDK 13.0.0 types this parameter as the wire `ListAccountsRequest`
+    // (adcp-client majors: "align list_accounts handlers with the wire
+    // request"), so the old structural cast is gone — drift in the request
+    // shape is now a typecheck failure rather than a silent `undefined`.
+    const req = filter;
     let filtered = items;
     // `sandbox: true` → keep only mode==='sandbox' rows (primary is already
     // in sandbox mode for sandbox principals). Previously this only returned
     // seeded accounts, which excluded the primary even when its mode matched.
     // notification_config_lifecycle's list_accounts step gates on the primary
     // being returned.
-    if (filterAny?.sandbox === true) {
+    if (req?.sandbox === true) {
       filtered = filtered.filter((a) => (a as { mode?: string }).mode === 'sandbox');
     }
     // Account-id filter: storyboard's list_accounts often targets a specific
@@ -199,7 +199,12 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
     // the notification_config_lifecycle list step received the full list and
     // the field_value assertion on accounts[0].account_id failed when the
     // primary singleton wasn't the targeted ID.
-    const targetAccountId = filterAny?.account?.account_id;
+    // AccountReference is a union: the account_id arm, or the brand+operator
+    // arm used during initial sync_accounts. Only the former filters a list.
+    const accountRef = req?.account;
+    const targetAccountId = accountRef !== undefined && 'account_id' in accountRef
+      ? accountRef.account_id
+      : undefined;
     if (typeof targetAccountId === 'string') {
       filtered = filtered.filter((a) => a.id === targetAccountId);
     }
@@ -207,13 +212,22 @@ export const accountStore: AccountStore<PurrAccountMeta> = {
     // max_results=2 and expects has_more=true+cursor on page 1, has_more=false
     // + no cursor on page 2. Offsets serialize into the opaque cursor as a
     // decimal string; anything unparseable resets to page 0.
-    const pageSize = Math.max(1, Math.min(500, filterAny?.pagination?.max_results ?? 500));
-    const offset = Number.parseInt(filterAny?.pagination?.cursor ?? '0', 10) || 0;
+    // `max_results` is capped at 100 by pagination-request.json; clamp to the
+    // schema bound rather than our own 500 so an over-large ask can't produce
+    // a page the response schema rejects. Omitted → return everything.
+    const requested = req?.pagination?.max_results;
+    const pageSize = requested === undefined
+      ? Math.max(1, filtered.length)
+      : Math.max(1, Math.min(100, requested));
+    const offset = Number.parseInt(req?.pagination?.cursor ?? '0', 10) || 0;
     const page = filtered.slice(offset, offset + pageSize);
     const nextOffset = offset + page.length;
     const hasMore = nextOffset < filtered.length;
+    // SDK 13.0.0 projects `totalCount` into the wire `pagination.total_count`.
+    // The full set is already in memory here, so the count is free — emit it.
     return {
       items: page,
+      totalCount: filtered.length,
       ...(hasMore && { nextCursor: String(nextOffset) }),
     };
   },
