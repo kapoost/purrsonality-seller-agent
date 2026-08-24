@@ -1,6 +1,7 @@
 import { createAdcpServerFromPlatform, serve, verifyApiKey } from '@adcp/sdk/server';
 import { startAdminServer } from './admin/server.ts';
 import { complyTest } from './comply.ts';
+import { legacyCreativeFormatConverter } from './creative-formats.ts';
 import { runMigrations } from './db/migrations.ts';
 import { loadEnv } from './env.ts';
 import { log } from './observability/logger.ts';
@@ -132,6 +133,10 @@ serve(
       // opt-in remains possible via /.well-known/jwks.json; we just don't
       // *verify* incoming signatures at the SDK level anymore.
       complyTest,
+      // Projects stored legacy creative refs to canonical declarations on the
+      // 3.1 wire. Without it an unmappable ref fails the entire list_creatives /
+      // sync_creatives response — see creative-formats.ts for the store census.
+      legacyCreativeFormatConverter,
     }),
   {
     port: sdkPort,
