@@ -479,14 +479,65 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       if (isV2Only) {
         delete (base as unknown as { format_ids?: unknown }).format_ids;
       }
-      // NOTE: no dual-emission `format_ids` reattach — SDK 13.0.0-rc.7's
-      // toCanonicalOnlyProduct enforces `v1_format_ref` coverage on every
-      // format_id, and attaching format_ids here without matching
-      // v1_format_ref in format_options[] triggers
-      // LEGACY_FORMAT_ID_DROPPED_UNMAPPED and fails the response with
-      // INVALID_REQUEST. The canonical_product_discovery storyboard's
-      // dual-emission assertion is spec-side unresolvable — tracked at
-      // adcp#6227.
+      // Dual-emission `format_ids` reattach. The rc.7-era suppression here is
+      // obsolete: adcp#6227 closed with the WG ruling that AdCP 3.1 permits
+      // dual `format_ids` + `format_options`, and the SDK must preserve it by
+      // default (fix shipped in 13.0.0-rc.11 via adcp-client#2492).
+      //
+      // How the reattach travels: `LEGACY_FORMAT_ID_DROPPED_UNMAPPED` is now
+      // filtered out of the blocking-diagnostic set, so authoring format_ids
+      // no longer fails the response. `preserveAuthoredFormatIds` stashes what
+      // we author against the canonical product, and at wire time
+      // `attachCanonicalFormatWireRefs` re-emits it — gated on
+      // `shouldEmitTransitionalDualCreativeWire`, true for every 3.1.x we
+      // serve. So we author the legacy refs and the framework carries them.
+      //
+      // Without this, `products[0].format_ids` is absent and three tracks fail
+      // on it: Core Protocol schema_validation, Product Discovery
+      // canonical_formats (asserts format_ids[0].agent_url resolves to the AAO
+      // catalog), and Media Buy get_products_brief.
+      //
+      // Source is the same `canonicalDeclarationFromBareId` output that fed
+      // format_options, so the two sides cannot disagree by construction —
+      // enrichedDecls keeps `v1_format_ref`, resolvedDecls is the stripped
+      // copy buildProduct requires. Fixture-seeded refs win when present.
+      if (!isV2Only) {
+        const seenRefs = new Set<string>();
+        const authoredFormatIds: Array<{ agent_url?: string; id: string }> = [];
+        // Refs MUST come from the format_options we actually emit, never from
+        // the fixture's `format_id_refs`. The SDK hard-fails a response whose
+        // format_ids and format_options[].v1_format_ref disagree
+        // ("get_products returned divergent format_ids and format_options
+        // .v1_format_ref values") — and canonical_formats/'Flag divergent
+        // dual-emission' seeds exactly such a product on purpose. Deriving
+        // from the emitted declarations makes agreement structural: a
+        // deliberately-divergent fixture simply authors nothing here and is
+        // reported through the FORMAT_DECLARATION_DIVERGENT producer advisory
+        // below instead of taking the whole get_products response down.
+        // Which declarations were actually emitted decides where the refs
+        // come from. A seeded fixture's `format_options` is copied onto the
+        // response verbatim above and keeps its `v1_format_ref`, so read it
+        // directly. Native products carry buildProduct's output, whose
+        // `v1_format_ref` was stripped on the way in (buildProduct rejects
+        // legacy creative identity) — there the 1:1 enrichedDecls copy is the
+        // faithful record of what those declarations cover.
+        const declarationsForRefs: ReadonlyArray<unknown> = p.format_options && p.format_options.length > 0
+          ? p.format_options
+          : enrichedDecls;
+        const candidateRefs = declarationsForRefs.flatMap((d) => {
+          const refs = (d as { v1_format_ref?: ReadonlyArray<{ agent_url?: string; id: string }> }).v1_format_ref;
+          return Array.isArray(refs) ? refs : [];
+        });
+        for (const ref of candidateRefs) {
+          const key = `${ref.agent_url ?? ''}\u0000${ref.id}`;
+          if (seenRefs.has(key)) continue;
+          seenRefs.add(key);
+          authoredFormatIds.push({ ...(ref.agent_url !== undefined && { agent_url: ref.agent_url }), id: ref.id });
+        }
+        if (authoredFormatIds.length > 0) {
+          (base as unknown as { format_ids: unknown }).format_ids = authoredFormatIds;
+        }
+      }
       if (p.publisher_properties) {
         (base as unknown as { publisher_properties: unknown }).publisher_properties = p.publisher_properties;
       }
