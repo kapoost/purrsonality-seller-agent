@@ -42,7 +42,15 @@ export async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
     return await fn();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    const retriable = /Connection terminated|ECONNRESET|Client has encountered a connection error|write EPIPE/i.test(msg);
+    // `timeout exceeded when trying to connect` is pg-pool's message when every
+    // slot in the pool is busy and none frees within connectionTimeoutMillis.
+    // Added 2026-08-24 after it took the seller down: list_creatives went from
+    // 12ms to a 2.5-minute hang and update_media_buy burned 116s before failing,
+    // because connections were held and nothing invalidated the pool. The retry
+    // path below ends the cached pool before the second attempt, which is
+    // exactly the recovery this needs — a plain retry would queue behind the
+    // same stuck connections.
+    const retriable = /Connection terminated|ECONNRESET|Client has encountered a connection error|write EPIPE|timeout exceeded when trying to connect/i.test(msg);
     if (!retriable) throw err;
     // Ensure the cached pool is invalidated even if the error handler
     // hasn't fired yet (some pg errors bypass the pool-level listener).
