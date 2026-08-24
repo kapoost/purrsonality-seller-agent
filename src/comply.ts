@@ -37,9 +37,43 @@ function mockStatus(wire: string): 'confirmed' | 'delivering' | 'paused' | 'comp
 }
 
 export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
+  // Fail-closed gate on every declared non-sandbox signal. Returning false
+  // makes the SDK emit `ControllerError: FORBIDDEN`, which is what
+  // comply_controller_mode_gate/deny_live_caller asserts.
+  //
+  // Three shapes are checked because three carry the caller's mode and we
+  // previously read only the first:
+  //   - `account.sandbox`      — the account ref on the request
+  //   - `context.account`      — where the SDK also looks for that ref
+  //                              (`input.account ?? input.context?.account`),
+  //                              so reading only the top level left a bypass
+  //   - `auth.sandbox`         — the shape the SDK's own docstring uses
+  //                              (`sandboxGate: input => input.auth?.sandbox === true`).
+  //                              VERIFIED INERT as written: the framework strips
+  //                              input fields not declared by the tool's input
+  //                              schema (the same mechanism AAO reports as
+  //                              `input_schema_field_stripped`), and `auth` is not
+  //                              in TOOL_INPUT_SHAPE, so it never reaches us — a
+  //                              probe sending `auth.sandbox: false` dispatched
+  //                              normally. Kept as a fail-closed branch in case the
+  //                              field is ever declared via `config.inputSchema`;
+  //                              do not count on it today.
+  //
+  // Note the gate signature is `(input) => boolean` — it never sees `authInfo`,
+  // so it cannot key on the authenticated principal. Mode therefore has to be
+  // read from the request, which is caller-controlled. The real protection for
+  // a live principal is upstream of here: the framework resolves the principal
+  // via `platform.accounts.resolve` and, since 13.x, hides the tool from
+  // non-sandbox principals entirely. This gate is the second line, not the first.
   sandboxGate: (input) => {
-    const account = (input as { account?: { sandbox?: boolean } }).account;
-    if (account?.sandbox === false) return false;
+    const i = input as {
+      account?: { sandbox?: boolean };
+      context?: { account?: { sandbox?: boolean } };
+      auth?: { sandbox?: boolean };
+    };
+    if (i.account?.sandbox === false) return false;
+    if (i.context?.account?.sandbox === false) return false;
+    if (i.auth?.sandbox === false) return false;
     return true;
   },
 
