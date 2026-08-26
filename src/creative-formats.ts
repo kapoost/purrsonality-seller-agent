@@ -46,6 +46,20 @@ export const legacyCreativeFormatConverter: LegacyFormatConverter = ({ formatId 
     return withoutLegacyRef(direct as Declaration);
   }
 
+  // Bare canonical kinds stored as if they were catalogue ids. `image` is not a
+  // catalogue id and resolves to nothing, but a row can end up carrying it —
+  // storyboards write creatives through this store, and one unresolvable row
+  // fails the entire list_creatives response rather than just itself. Seen in
+  // production on 2026-08-26: a single `:: image` row took the call down.
+  // `native_content` resolves to a `format_kind: image` declaration, so it is
+  // the honest minimal shape for a row that only tells us "an image".
+  if (id === 'image') {
+    const imageDecl = canonicalDeclarationFromBareId('native_content');
+    if (imageDecl != null) {
+      return withoutLegacyRef(imageDecl as Declaration);
+    }
+  }
+
   // `native_in_feed` and `native_post` resolve to nothing, while their sibling
   // `native_content` does. All three are the same fixture family from the same
   // owner and describe the same thing: a native placement whose assets the buyer
