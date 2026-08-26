@@ -22,6 +22,7 @@ import {
   type SyncCreativesRow,
 } from '@adcp/sdk/server';
 import { FormatAsset } from '@adcp/sdk';
+import { NATIVE_IN_FEED_CONSTRAINTS } from '../creative-formats.ts';
 import { canonicalDeclarationFromBareId } from '@adcp/sdk/v2/projection';
 import type {
   GetProductsRequest,
@@ -1802,10 +1803,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // other validation. Storyboard's validation_failures track exercises
       // 4 specific cases: title too long, image wrong size, cta not in
       // enum, pixel_tracker custom event missing name.
-      const formatRefSync = cAny['format_id'] as { id?: string } | string | undefined;
-      const formatIdSync = typeof formatRefSync === 'object' && formatRefSync !== null
-        ? formatRefSync.id
-        : (typeof formatRefSync === 'string' ? formatRefSync : undefined);
+      const formatIdSync = creativeFormatIdentity(cAny).id;
       if (formatIdSync === 'native_in_feed') {
         const a = (cAny['assets'] as Record<string, unknown> | undefined) ?? {};
         const title = (a['title'] as { content?: string } | undefined)?.content ?? '';
@@ -1824,9 +1822,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         // UPPERCASE_UNDERSCORE per the runner's valid example "LEARN_MORE";
         // the invalid sample is "EXPLORE_MORE" — same shape, just not in
         // the enum.)
-        const TITLE_MAX_CHARS = 80;
-        const ALLOWED_IMAGE_SIZES: ReadonlyArray<[number, number]> = [[1200, 627], [1080, 1080]];
-        const ALLOWED_CTAS = new Set(['LEARN_MORE', 'SHOP_NOW', 'SIGN_UP', 'GET_STARTED', 'BOOK_NOW', 'DOWNLOAD']);
+        // Same constants the format declaration publishes — imported rather than
+        // repeated so what we advertise and what we enforce cannot drift.
+        const TITLE_MAX_CHARS = NATIVE_IN_FEED_CONSTRAINTS.title_max_chars;
+        const ALLOWED_IMAGE_SIZES: ReadonlyArray<[number, number]> =
+          NATIVE_IN_FEED_CONSTRAINTS.main_image_sizes.map((sz) => [sz.width, sz.height] as [number, number]);
+        const ALLOWED_CTAS = new Set<string>(NATIVE_IN_FEED_CONSTRAINTS.cta_values);
         let nativeError: { code: string; message: string; field?: string; details?: unknown } | null = null;
         if (title.length > TITLE_MAX_CHARS) {
           nativeError = {
@@ -1933,11 +1934,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       if (!provenance) {
         // Keep mockUpstream + creativesStore in sync via the normal path below.
         mockUpstream.seedCreative(id, cAny, accountId);
-        const formatRefBare = cAny['format_id'] as { agent_url?: string; id?: string } | string | undefined;
-        const formatIdBare =
-          typeof formatRefBare === 'object' && formatRefBare !== null
-            ? { agent_url: formatRefBare.agent_url ?? FORMAT_AGENT_URL, id: formatRefBare.id ?? 'display_300x250' }
-            : { agent_url: FORMAT_AGENT_URL, id: typeof formatRefBare === 'string' ? formatRefBare : 'display_300x250' };
+        const formatIdBare = creativeFormatIdentity(cAny).ref;
         const submissionBare = await creativesStore.submit({
           creative_id: id,
           account_id_hash: accountIdHash,
@@ -2330,6 +2327,48 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     } as unknown as ListCreativesResponse;
   },
 });
+
+
+// Format identity of an incoming creative, from whichever shape the wire used.
+//
+// On a 3.1 canonical wire the framework strips the legacy `format_id` before the
+// handler runs — `CanonicalProjectedCreative` declares `format_id?: never` — and
+// hands over `format_kind` instead. Reading only `format_id` saw nothing on every
+// canonical request, so the native_in_feed constraint checks had nothing to match
+// on and never fired.
+//
+// The returned `ref` is what gets stored, and it is deliberately NOT the bare
+// kind: `image` is a kind, not a catalogue id, it resolves to nothing, and one
+// stored row carrying it fails the entire list_creatives projection rather than
+// just its own entry. That is not theoretical — a probe row wrote exactly that on
+// 2026-08-26 and took the call down. A sized image is reconstructible, so that
+// case keeps its real identity.
+function creativeFormatIdentity(
+  c: Record<string, unknown>,
+): { id: string; ref: { agent_url: string; id: string } } {
+  const legacy = c['format_id'] as { agent_url?: string; id?: string } | string | undefined;
+  if (typeof legacy === 'object' && legacy !== null && typeof legacy.id === 'string') {
+    return { id: legacy.id, ref: { agent_url: legacy.agent_url ?? FORMAT_AGENT_URL, id: legacy.id } };
+  }
+  if (typeof legacy === 'string' && legacy.length > 0) {
+    return { id: legacy, ref: { agent_url: FORMAT_AGENT_URL, id: legacy } };
+  }
+  const kind = c['format_kind'];
+  if (typeof kind === 'string' && kind.length > 0) {
+    if (kind === 'image') {
+      const params = c['params'] as { width?: unknown; height?: unknown } | undefined;
+      const w = params?.width;
+      const h = params?.height;
+      if (typeof w === 'number' && typeof h === 'number') {
+        const sized = `display_${w}x${h}`;
+        return { id: sized, ref: { agent_url: FORMAT_AGENT_URL, id: sized } };
+      }
+    }
+    return { id: kind, ref: { agent_url: FORMAT_AGENT_URL, id: 'display_300x250' } };
+  }
+  return { id: 'display_300x250', ref: { agent_url: FORMAT_AGENT_URL, id: 'display_300x250' } };
+}
+
 
 export const purrsonalityAdapter: InventoryAdapter = {
   name: 'purrsonality',

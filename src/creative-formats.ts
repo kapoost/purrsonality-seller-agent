@@ -23,8 +23,20 @@
 // on the bare id and treat the owner as provenance rather than identity. That is
 // sound here because this seller mints the ids it stores; a multi-tenant seller
 // proxying several creative agents would need owner-scoped resolution.
-import { canonicalDeclarationFromBareId } from '@adcp/sdk/v2/projection';
+import { canonicalDeclarationFromBareId, nativeInFeedFormatDeclaration } from '@adcp/sdk/v2/projection';
 import type { LegacyFormatConverter } from '@adcp/sdk';
+
+// The native_in_feed constraints this seller enforces, in one place so what the
+// format declaration publishes and what the sync handler rejects cannot drift.
+export const NATIVE_IN_FEED_CONSTRAINTS = {
+  title_max_chars: 80,
+  cta_values: ['LEARN_MORE', 'SHOP_NOW', 'SIGN_UP', 'GET_STARTED', 'BOOK_NOW', 'DOWNLOAD'],
+  main_image_sizes: [
+    { width: 1200, height: 627 },
+    { width: 1080, height: 1080 },
+  ],
+} as const;
+
 
 // The SDK attaches the source ref as `v1_format_ref` itself. Returning one from
 // the resolver too would point the declaration at the AAO catalog entry rather
@@ -60,7 +72,29 @@ export const legacyCreativeFormatConverter: LegacyFormatConverter = ({ formatId 
     }
   }
 
-  // `native_in_feed` and `native_post` resolve to nothing, while their sibling
+  // `native_in_feed` is a canonical kind of its own, declared with the real
+  // constraints we enforce. This is what preserves the format's identity across
+  // the wire: the framework strips the legacy `format_id` on a canonical request
+  // and hands the handler `format_kind`, so borrowing a sibling's `image` shape
+  // silently turned every native creative into a generic image and the format's
+  // own constraints never got applied.
+  //
+  // Two production attempts at this failed on 2026-08-26 and I blamed the
+  // declaration both times. A local harness — synthetic platform, no DB — showed
+  // this exact declaration projecting cleanly and keeping `format_kind:
+  // native_in_feed` on the response. The real breaker was a stored row carrying
+  // `format_id.id = "image"`, an unresolvable bare kind that fails the whole
+  // response; that is handled above. Note the builder requires `params` —
+  // calling it bare yields a declaration the projection rejects.
+  if (id === 'native_in_feed') {
+    return nativeInFeedFormatDeclaration({
+      title_max_chars: NATIVE_IN_FEED_CONSTRAINTS.title_max_chars,
+      cta_values: [...NATIVE_IN_FEED_CONSTRAINTS.cta_values],
+      main_image_sizes: NATIVE_IN_FEED_CONSTRAINTS.main_image_sizes.map((sz) => ({ ...sz })),
+    } as never) as Declaration;
+  }
+
+  // `native_post` and friends resolve to nothing, while their sibling
   // `native_content` does. All three are the same fixture family from the same
   // owner and describe the same thing: a native placement whose assets the buyer
   // uploads. Borrow the sibling's canonical shape rather than invent one, so the
