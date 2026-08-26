@@ -295,16 +295,46 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       const multiPricing = p.pricing_options && p.pricing_options.length > 0
         ? p.pricing_options.filter((po) => !wantedCurrencies || wantedCurrencies.length === 0 || wantedCurrencies.includes(po.currency))
         : null;
+      // Auction options carry `price_guidance` — percentiles of recent winning
+      // bids a buyer calibrates its opening bid against. sales_non_guaranteed
+      // reads `pricing_options[0].price_guidance.p50` as that opening bid, and a
+      // floor alone does not say where bids actually clear.
+      //
+      // Derived from the floor rather than measured: this is a reference seller
+      // with simulated inventory and no auction history, the same way its
+      // impressions and viewability figures are simulated. The multipliers keep
+      // the percentiles monotonic and above the floor, which is the property a
+      // bidder relies on. Fixed-price options get none — the field is auction
+      // guidance and means nothing on a fixed rate.
+      const auctionGuidance = (floor: number) => ({
+        p25: Number((floor * 1.1).toFixed(2)),
+        p50: Number((floor * 1.3).toFixed(2)),
+        p75: Number((floor * 1.6).toFixed(2)),
+        p90: Number((floor * 2.0).toFixed(2)),
+      });
       const pricing = multiPricing
-        ? multiPricing.map((po) => buildPricingOption({
-            id: po.pricing_option_id,
-            model: po.pricing_model as 'cpm',
-            ...(po.fixed_price !== undefined && { fixed: po.fixed_price }),
-            ...(po.floor_price !== undefined && { floor: po.floor_price }),
-            currency: po.currency,
-          }))
+        ? multiPricing.map((po) => {
+            const option = buildPricingOption({
+              id: po.pricing_option_id,
+              model: po.pricing_model as 'cpm',
+              ...(po.fixed_price !== undefined && { fixed: po.fixed_price }),
+              ...(po.floor_price !== undefined && { floor: po.floor_price }),
+              currency: po.currency,
+            });
+            if (po.floor_price !== undefined) {
+              (option as unknown as { price_guidance: unknown }).price_guidance =
+                auctionGuidance(po.floor_price);
+            }
+            return option;
+          })
         : (p.pricing_kind === 'floor'
-          ? { model: 'cpm' as const, floor: p.min_cpm, currency: p.currency, pricing_option_id: p.pricing_option_id }
+          ? {
+              model: 'cpm' as const,
+              floor: p.min_cpm,
+              currency: p.currency,
+              pricing_option_id: p.pricing_option_id,
+              price_guidance: auctionGuidance(p.min_cpm),
+            }
           : { model: 'cpm' as const, fixed: p.min_cpm, currency: p.currency, ...(p.pricing_option_id && { pricing_option_id: p.pricing_option_id }) });
       // 3.1 canonical_formats — buildProduct now takes canonical
       // format_options directly. We resolve every legacy bare id via
@@ -1422,6 +1452,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         by_package: order
           ? order.product_ids.map((pid) => ({
               package_id: `${order.order_id}_${pid}`,
+              // Per-package finality is its own flag in the schema, separate from
+              // the row-level one above — billing_finality_delivery asserts
+              // `by_package[0].is_final`, and setting only the parent left it
+              // absent. Provisional while the buy is in flight: these figures are
+              // still subject to measurement adjustment.
+              is_final: false,
               impressions,
               spend,
               clicks,
