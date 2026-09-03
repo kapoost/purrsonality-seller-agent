@@ -1,6 +1,15 @@
 import { PRODUCTS, PUBLISHER, type PurrProductConfig, type ProductAllowedAction } from '../config/purrsonality.ts';
 import { ordersStore } from '../stores/orders.ts';
 
+// The three states after which no further delivery maturation happens on this
+// reference seller. Shared so the finality stamp and the delivery projection
+// cannot drift apart.
+export const TERMINAL_ORDER_STATUSES: ReadonlySet<string> = new Set([
+  'completed',
+  'canceled',
+  'rejected',
+]);
+
 export interface MockOrder {
   order_id: string;
   network_code: string;
@@ -30,6 +39,13 @@ export interface MockOrder {
   // both fields are echoed on the update response and on get_media_buys.
   canceled_by?: 'buyer' | 'seller' | 'system';
   canceled_at?: string;
+  // Stamped once when the order first reaches a terminal state, so
+  // get_media_buy_delivery can report a stable `finalized_at`. Computing it
+  // at read time would move the timestamp on every poll of an already-closed
+  // buy, and would let the row-level and per-package copies disagree inside
+  // one response. Persisted with the rest of the order (the store writes the
+  // whole object as JSON), so it survives redeploy.
+  finalized_at?: string;
   // Seeded package overrides via comply_test_controller seed_media_buy.
   // When present, get_media_buys returns these verbatim instead of
   // synthesising packages from `product_ids` — supports legacy-fallback
@@ -604,6 +620,9 @@ export const mockUpstream = {
     if (!order) return undefined;
     const previous = order.status;
     order.status = status;
+    if (TERMINAL_ORDER_STATUSES.has(status) && !order.finalized_at) {
+      order.finalized_at = new Date().toISOString();
+    }
     ordersStore.persist(order);
     return previous;
   },

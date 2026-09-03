@@ -43,7 +43,7 @@ import type {
 } from '@adcp/sdk';
 import { createHash } from 'node:crypto';
 import { PUBLISHER } from '../config/purrsonality.ts';
-import { mockUpstream } from '../upstream/mock.ts';
+import { mockUpstream, TERMINAL_ORDER_STATUSES } from '../upstream/mock.ts';
 import { creativesStore } from '../stores/creatives.ts';
 import { impressionsStore } from '../stores/impressions.ts';
 import { tryEmitAuditAnchor } from '../audit/index.ts';
@@ -1472,8 +1472,16 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // A terminal buy on this reference seller has no further measurement
       // maturation pending — the simulated figures are closed — so the
       // post_sivt billing basis is the honest window to report at that point.
-      const buyIsFinal = order != null && (order.status === 'completed' || order.status === 'canceled');
+      const buyIsFinal = order != null && TERMINAL_ORDER_STATUSES.has(order.status);
       const deliveryWindow = buyIsFinal ? 'post_sivt' : 'post_givt';
+      // Stamped when the order first went terminal (mock.ts forceStatus), not
+      // computed here: a `finalized_at` derived at read time would move on
+      // every poll of a closed buy, and the row-level and per-package copies
+      // below would disagree within one response. Falls back to canceled_at
+      // for orders closed through updateOrder before this stamp existed.
+      const finalizedAt = buyIsFinal
+        ? (order.finalized_at ?? order.canceled_at ?? order.created_at)
+        : undefined;
       return {
         media_buy_id: id,
         status: order ? mockToWireStatus(order.status) : 'active',
@@ -1481,7 +1489,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         // here unless every by_package entry is final for the same window,
         // which is why both read from buyIsFinal / deliveryWindow.
         is_final: buyIsFinal,
-        ...(buyIsFinal && { finalized_at: new Date().toISOString() }),
+        ...(finalizedAt && { finalized_at: finalizedAt }),
         pricing_model: 'cpm' as const,
         totals: {
           impressions,
@@ -1499,7 +1507,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
               // absent. Provisional while the buy is in flight: these figures are
               // still subject to measurement adjustment.
               is_final: buyIsFinal,
-              ...(buyIsFinal && { finalized_at: new Date().toISOString() }),
+              ...(finalizedAt && { finalized_at: finalizedAt }),
               // Provisional rows are post-GIVT and explicitly not the billing
               // basis; a terminal buy reports at post_sivt, the window
               // measurement_terms.billing_measurement reconciles against. Both
@@ -1794,6 +1802,22 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // the format as the caller identifies it, not claiming to own the
       // catalog entry — owner stays provenance, id stays identity, the same
       // resolution rule creative-formats.ts already applies to stored refs.
+      //
+      // Echo only owners we actually recognise. Parroting back whatever
+      // agent_url the caller sent would let a request assert that one of our
+      // formats lives at an arbitrary host — the response is a catalog
+      // statement, not a mirror of the request. Recognised means: our own
+      // /mcp, the canonical AdCP creative catalog, or the owner already
+      // carried by the entry we are about to return (seeded fixtures bring
+      // their own refs). Anything else falls through to our built-in entry
+      // unchanged, which is the honest answer to "who owns this id".
+      //
+      // Compared with the trailing slash normalised away: the store holds
+      // both `…adcontextprotocol.org` and `…adcontextprotocol.org/` for the
+      // same catalog, the punctuation difference creative-formats.ts already
+      // documents.
+      const normalizeOwner = (u: string) => u.replace(/\/+$/, '');
+      const CANONICAL_CATALOG = 'https://creative.adcontextprotocol.org';
       const wantedRefs = new Map<string, { agent_url?: string; id: string }>();
       for (const f of r.format_ids!) {
         if (typeof f !== 'string' && typeof f.agent_url === 'string') {
@@ -1804,7 +1828,13 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         .filter((f) => wantedIds.has(f.format_id.id))
         .map((f) => {
           const ref = wantedRefs.get(f.format_id.id);
-          return ref ? { ...f, format_id: { agent_url: ref.agent_url!, id: ref.id } } : f;
+          if (!ref?.agent_url) return f;
+          const asked = normalizeOwner(ref.agent_url);
+          const recognised =
+            asked === normalizeOwner(FORMAT_AGENT_URL) ||
+            asked === CANONICAL_CATALOG ||
+            asked === normalizeOwner(f.format_id.agent_url);
+          return recognised ? { ...f, format_id: { agent_url: ref.agent_url, id: ref.id } } : f;
         });
     }
     if (typeof r.name_search === 'string' && r.name_search.length > 0) {
