@@ -86,6 +86,36 @@ export const platform = definePlatform<null, PurrAccountMeta>({
       media_buy: {
         buying_modes: ['brief', 'wholesale'] as const,
       },
+      // We declare `creative` in supported_protocols (sync_creatives /
+      // list_creatives / list_creative_formats), so 3.1.20 pulls in the
+      // creative capability contracts. Two of them are pre-call
+      // discriminators the runner reads as `field_present` /
+      // `capture_path_not_resolvable`, and both are honestly `false` here:
+      //
+      //   bills_through_adcp — we never bill for creative production.
+      //     Creative handling is bundled into the media buy; there is no
+      //     rate card, list_creatives returns no pricing_options, and
+      //     report_usage is not a surface we expose. Already declared
+      //     false in /.well-known/adcp-capabilities.json (well-known/
+      //     adcp-capabilities.ts:43) — this mirrors it onto the protocol
+      //     response, which is where creative/billing_out_of_band reads it.
+      //
+      //   supports_evaluator — experimental build_creative input. We do
+      //     not implement build_creative at all. Declared explicitly rather
+      //     than left to its `false` default because the storyboard captures
+      //     the path and fails on "did not resolve to a usable value".
+      //
+      // NOT declared: `supported_formats`. Its schema defines it as the
+      // canonical formats an agent can PRODUCE via build_creative, replacing
+      // list_creative_formats "for creative agents". We are a sales seller
+      // that ACCEPTS creatives — list_creative_formats stays our discovery
+      // surface. Declaring production capability we don't have would be the
+      // dishonest kind of badge-chasing. creative/canonical_supported_formats
+      // stays failing on purpose; see the session note for the upstream angle.
+      creative: {
+        bills_through_adcp: false,
+        supports_evaluator: false,
+      },
     },
   },
   accounts: accountStore,

@@ -408,6 +408,32 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
             ? ['impressions', 'spend', 'clicks', 'views', 'completed_views', 'completion_rate']
             : ['impressions', 'spend', 'clicks'],
           date_range_support: 'date_range',
+          // Maturation stages this product reports against. `post_sivt` is the
+          // guarantee basis and matches
+          // measurement_terms.billing_measurement.measurement_window in
+          // config/purrsonality.ts; `post_givt` is the provisional stage the
+          // in-flight numbers represent (general invalid traffic filtered,
+          // sophisticated IVT not yet). get_media_buy_delivery stamps the
+          // provisional window onto every by_package row while is_final is
+          // false — media_buy_seller/billing_finality_delivery reads
+          // `by_package[0].measurement_window` and requires the provisional
+          // stage to be distinguishable from the billing stage.
+          measurement_windows: [
+            {
+              window_id: 'post_givt',
+              description: 'Provisional delivery after general invalid-traffic filtering; still subject to SIVT adjustment.',
+              duration_days: 0,
+              expected_availability_days: 0,
+              is_guarantee_basis: false,
+            },
+            {
+              window_id: 'post_sivt',
+              description: 'Reconciled delivery after sophisticated invalid-traffic filtering. Billing basis.',
+              duration_days: 0,
+              expected_availability_days: 3,
+              is_guarantee_basis: true,
+            },
+          ],
           // Seeded fixtures (comply_test_controller) override the default
           // attention-vendor metric so canonical_formats storyboards can
           // isolate the seeded product via
@@ -1459,6 +1485,12 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
               // absent. Provisional while the buy is in flight: these figures are
               // still subject to measurement adjustment.
               is_final: false,
+              // Pairs with is_final: false — these are post-GIVT provisional
+              // figures, not the post_sivt billing basis. Both window_ids are
+              // declared in the product's
+              // reporting_capabilities.measurement_windows above; the schema
+              // requires this to reference one of them.
+              measurement_window: 'post_givt',
               impressions,
               spend,
               clicks,
@@ -1732,7 +1764,32 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       const wantedIds = new Set(
         r.format_ids!.map((f) => (typeof f === 'string' ? f : f.id)),
       );
-      allFormats = allFormats.filter((f) => wantedIds.has(f.format_id.id));
+      // Structured refs the caller handed us, keyed by id. A product declares
+      // its formats as `{agent_url, id}` pointing at the canonical catalog
+      // (`https://creative.adcontextprotocol.org/`), but our built-in entries
+      // are stamped with FORMAT_AGENT_URL — this seller's own /mcp. Matching on
+      // the bare id and then answering with OUR owner substitutes a different
+      // FormatId than the one asked about, which is exactly what
+      // media_buy_seller / schema_validation assert against ("Returned
+      // format_id round-trips verbatim — the agent cannot substitute a
+      // different format in response to the filter").
+      //
+      // Echo the caller's ref back on a match. We are confirming we support
+      // the format as the caller identifies it, not claiming to own the
+      // catalog entry — owner stays provenance, id stays identity, the same
+      // resolution rule creative-formats.ts already applies to stored refs.
+      const wantedRefs = new Map<string, { agent_url?: string; id: string }>();
+      for (const f of r.format_ids!) {
+        if (typeof f !== 'string' && typeof f.agent_url === 'string') {
+          wantedRefs.set(f.id, f);
+        }
+      }
+      allFormats = allFormats
+        .filter((f) => wantedIds.has(f.format_id.id))
+        .map((f) => {
+          const ref = wantedRefs.get(f.format_id.id);
+          return ref ? { ...f, format_id: { agent_url: ref.agent_url!, id: ref.id } } : f;
+        });
     }
     if (typeof r.name_search === 'string' && r.name_search.length > 0) {
       const needle = r.name_search.toLowerCase();
