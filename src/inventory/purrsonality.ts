@@ -1464,10 +1464,24 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         standard: 'mrc',
       };
 
+      // Finality follows the buy's lifecycle rather than being pinned false.
+      // billing_finality_delivery walks both halves: while the buy is in
+      // flight it asserts the numbers are provisional (is_final: false plus a
+      // measurement_window that is NOT the billing basis), then it forces the
+      // buy terminal and asserts the row is final and carries finalized_at.
+      // A terminal buy on this reference seller has no further measurement
+      // maturation pending — the simulated figures are closed — so the
+      // post_sivt billing basis is the honest window to report at that point.
+      const buyIsFinal = order != null && (order.status === 'completed' || order.status === 'canceled');
+      const deliveryWindow = buyIsFinal ? 'post_sivt' : 'post_givt';
       return {
         media_buy_id: id,
         status: order ? mockToWireStatus(order.status) : 'active',
-        is_final: false,
+        // Row-level finality is a roll-up: the schema forbids is_final: true
+        // here unless every by_package entry is final for the same window,
+        // which is why both read from buyIsFinal / deliveryWindow.
+        is_final: buyIsFinal,
+        ...(buyIsFinal && { finalized_at: new Date().toISOString() }),
         pricing_model: 'cpm' as const,
         totals: {
           impressions,
@@ -1484,13 +1498,15 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
               // `by_package[0].is_final`, and setting only the parent left it
               // absent. Provisional while the buy is in flight: these figures are
               // still subject to measurement adjustment.
-              is_final: false,
-              // Pairs with is_final: false — these are post-GIVT provisional
-              // figures, not the post_sivt billing basis. Both window_ids are
-              // declared in the product's
+              is_final: buyIsFinal,
+              ...(buyIsFinal && { finalized_at: new Date().toISOString() }),
+              // Provisional rows are post-GIVT and explicitly not the billing
+              // basis; a terminal buy reports at post_sivt, the window
+              // measurement_terms.billing_measurement reconciles against. Both
+              // window_ids are declared in the product's
               // reporting_capabilities.measurement_windows above; the schema
               // requires this to reference one of them.
-              measurement_window: 'post_givt',
+              measurement_window: deliveryWindow,
               impressions,
               spend,
               clicks,
