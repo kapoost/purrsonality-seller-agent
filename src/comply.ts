@@ -5,6 +5,12 @@ import { PUBLISHER } from './config/purrsonality.ts';
 import { dropTaskRecord } from './stores/index.ts';
 import { log } from './observability/logger.ts';
 
+/* Window ids this seller declares in reporting_capabilities.measurement_windows
+ * (see inventory/purrsonality.ts). The delivery response schema requires
+ * by_package[].measurement_window to reference one of them, so an injected
+ * window outside this set is rejected rather than echoed onto the wire. */
+const DECLARED_MEASUREMENT_WINDOWS = new Set(['post_givt', 'post_sivt']);
+
 // `queryProvenanceAuditObservations` is an extension scenario landing in SDK
 // 9.x (adcp#2186); the 7.11.1 typed config doesn't expose it yet. We attach
 // the adapter via a widened type so the field rides through to the SDK
@@ -514,11 +520,27 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
       // get_media_buy_delivery reported is_final: false on the second read —
       // the storyboard never forces the buy terminal, so there was nothing
       // else for finality to be derived from.
-      const finality = params as unknown as {
+      // These three arrive from the compliance runner and travel straight to
+      // the wire, so they get checked rather than cast. `measurement_window`
+      // in particular must reference a window_id this seller declares in
+      // reporting_capabilities.measurement_windows — the response schema
+      // requires it — and a bad is_final/finalized_at type would break
+      // get-media-buy-delivery-response.json (boolean / date-time).
+      // Anything that fails a check is dropped, leaving the read path on its
+      // lifecycle derivation instead of emitting an invalid row.
+      const raw = params as unknown as Record<string, unknown>;
+      const finality: {
         is_final?: boolean;
         finalized_at?: string;
         measurement_window?: string;
-      };
+      } = {};
+      if (typeof raw['is_final'] === 'boolean') finality.is_final = raw['is_final'];
+      if (typeof raw['finalized_at'] === 'string' && !Number.isNaN(Date.parse(raw['finalized_at']))) {
+        finality.finalized_at = raw['finalized_at'];
+      }
+      if (typeof raw['measurement_window'] === 'string' && DECLARED_MEASUREMENT_WINDOWS.has(raw['measurement_window'])) {
+        finality.measurement_window = raw['measurement_window'];
+      }
       mockUpstream.addDelivery(params.media_buy_id, {
         ...(params.impressions !== undefined && { impressions: params.impressions }),
         ...(params.clicks !== undefined && { clicks: params.clicks }),

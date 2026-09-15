@@ -1480,10 +1480,23 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // back to the lifecycle rule, which is what every other storyboard
       // and the live path rely on.
       const injected = mockUpstream.getDeliveryFinality(id);
-      const buyIsFinal =
-        injected?.is_final ?? (order != null && TERMINAL_ORDER_STATUSES.has(order.status));
+      const lifecycleIsFinal = order != null && TERMINAL_ORDER_STATUSES.has(order.status);
+      // Either signal alone makes the row final; neither can veto the other.
+      // `injected?.is_final ?? lifecycleIsFinal` was wrong: ?? only falls
+      // through on null/undefined, so the provisional injection that opens
+      // billing_finality_delivery (is_final: false) latched false for the
+      // process lifetime and a buy later driven terminal would still report
+      // is_final: false and drop its finalized_at stamp.
+      const buyIsFinal = injected?.is_final === true || lifecycleIsFinal;
+      // Honour the injected window only while the injection still describes
+      // the state we are reporting. A stale provisional injection must not
+      // label a terminal buy's row post_givt.
       const deliveryWindow =
-        injected?.measurement_window ?? (buyIsFinal ? 'post_sivt' : 'post_givt');
+        injected?.measurement_window !== undefined && injected.is_final === buyIsFinal
+          ? injected.measurement_window
+          : buyIsFinal
+            ? 'post_sivt'
+            : 'post_givt';
       // Stamped when the order first went terminal (mock.ts forceStatus), not
       // computed here: a `finalized_at` derived at read time would move on
       // every poll of a closed buy, and the row-level and per-package copies
