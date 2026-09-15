@@ -1472,15 +1472,25 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // A terminal buy on this reference seller has no further measurement
       // maturation pending — the simulated figures are closed — so the
       // post_sivt billing basis is the honest window to report at that point.
-      const buyIsFinal = order != null && TERMINAL_ORDER_STATUSES.has(order.status);
-      const deliveryWindow = buyIsFinal ? 'post_sivt' : 'post_givt';
+      // An explicitly injected finality wins over the lifecycle derivation.
+      // billing_finality_delivery drives finality through the controller's
+      // simulate_delivery rows (is_final / finalized_at / measurement_window)
+      // without ever forcing the buy terminal, so order.status alone can
+      // never satisfy its second read. When nothing was injected we fall
+      // back to the lifecycle rule, which is what every other storyboard
+      // and the live path rely on.
+      const injected = mockUpstream.getDeliveryFinality(id);
+      const buyIsFinal =
+        injected?.is_final ?? (order != null && TERMINAL_ORDER_STATUSES.has(order.status));
+      const deliveryWindow =
+        injected?.measurement_window ?? (buyIsFinal ? 'post_sivt' : 'post_givt');
       // Stamped when the order first went terminal (mock.ts forceStatus), not
       // computed here: a `finalized_at` derived at read time would move on
       // every poll of a closed buy, and the row-level and per-package copies
       // below would disagree within one response. Falls back to canceled_at
       // for orders closed through updateOrder before this stamp existed.
       const finalizedAt = buyIsFinal
-        ? (order.finalized_at ?? order.canceled_at ?? order.created_at)
+        ? (injected?.finalized_at ?? order?.finalized_at ?? order?.canceled_at ?? order?.created_at)
         : undefined;
       return {
         media_buy_id: id,

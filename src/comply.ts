@@ -508,11 +508,25 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
 
   simulate: {
     delivery: async (params) => {
+      // billing_finality_delivery injects a provisional row, reads it, then
+      // injects a final one carrying is_final / finalized_at /
+      // measurement_window. Dropping those three on the floor here is why
+      // get_media_buy_delivery reported is_final: false on the second read —
+      // the storyboard never forces the buy terminal, so there was nothing
+      // else for finality to be derived from.
+      const finality = params as unknown as {
+        is_final?: boolean;
+        finalized_at?: string;
+        measurement_window?: string;
+      };
       mockUpstream.addDelivery(params.media_buy_id, {
         ...(params.impressions !== undefined && { impressions: params.impressions }),
         ...(params.clicks !== undefined && { clicks: params.clicks }),
         ...(params.reported_spend?.amount !== undefined && { spend: params.reported_spend.amount }),
         ...(params.reported_spend?.currency !== undefined && { currency: params.reported_spend.currency }),
+        ...(finality.is_final !== undefined && { is_final: finality.is_final }),
+        ...(finality.finalized_at !== undefined && { finalized_at: finality.finalized_at }),
+        ...(finality.measurement_window !== undefined && { measurement_window: finality.measurement_window }),
       });
       return {
         success: true,

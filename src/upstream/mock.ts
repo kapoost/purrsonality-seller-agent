@@ -102,7 +102,21 @@ const orders = new Map<string, MockOrder>();
 const requestKey = new Map<string, string>();
 const deliverySim = new Map<
   string,
-  { impressions: number; clicks: number; spend: number; currency: string }
+  {
+    impressions: number;
+    clicks: number;
+    spend: number;
+    currency: string;
+    // Finality carried by the injected row itself, not derived from the
+    // order's lifecycle. billing_finality_delivery never forces the buy
+    // terminal — it injects a provisional row, reads it, then injects a
+    // final one carrying is_final/finalized_at/measurement_window and reads
+    // again. Deriving finality from order.status alone left the second read
+    // reporting is_final: false forever.
+    is_final?: boolean;
+    finalized_at?: string;
+    measurement_window?: string;
+  }
 >();
 const seededProducts = new Map<string, PurrProductConfig>();
 const seededCreatives = new Map<string, Record<string, unknown>>();
@@ -567,6 +581,24 @@ export const mockUpstream = {
     return null;
   },
 
+  /** Finality injected by the comply controller for this buy, if any.
+   * Separate from getDelivery because MockDeliveryRow is the counter shape
+   * consumed by several call sites that have no business with finality. */
+  getDeliveryFinality(
+    orderId: string,
+  ): { is_final?: boolean; finalized_at?: string; measurement_window?: string } | undefined {
+    const sim = deliverySim.get(orderId);
+    if (!sim) return undefined;
+    if (sim.is_final === undefined && sim.finalized_at === undefined && sim.measurement_window === undefined) {
+      return undefined;
+    }
+    return {
+      ...(sim.is_final !== undefined && { is_final: sim.is_final }),
+      ...(sim.finalized_at !== undefined && { finalized_at: sim.finalized_at }),
+      ...(sim.measurement_window !== undefined && { measurement_window: sim.measurement_window }),
+    };
+  },
+
   getDelivery(orderId: string): MockDeliveryRow | null {
     const o = orders.get(orderId);
     if (!o) return null;
@@ -765,7 +797,15 @@ export const mockUpstream = {
 
   addDelivery(
     mediaBuyId: string,
-    delta: { impressions?: number; clicks?: number; spend?: number; currency?: string },
+    delta: {
+      impressions?: number;
+      clicks?: number;
+      spend?: number;
+      currency?: string;
+      is_final?: boolean;
+      finalized_at?: string;
+      measurement_window?: string;
+    },
   ): void {
     const prev = deliverySim.get(mediaBuyId) ?? {
       impressions: 0,
@@ -773,11 +813,23 @@ export const mockUpstream = {
       spend: 0,
       currency: 'USD',
     };
+    // Counters accumulate; finality is last-write-wins. A later provisional
+    // injection legitimately walks a row back from final, so we carry the
+    // delta's value whenever it names one rather than latching true.
     deliverySim.set(mediaBuyId, {
       impressions: prev.impressions + (delta.impressions ?? 0),
       clicks: prev.clicks + (delta.clicks ?? 0),
       spend: prev.spend + (delta.spend ?? 0),
       currency: delta.currency ?? prev.currency,
+      ...(delta.is_final !== undefined
+        ? { is_final: delta.is_final }
+        : prev.is_final !== undefined && { is_final: prev.is_final }),
+      ...(delta.finalized_at !== undefined
+        ? { finalized_at: delta.finalized_at }
+        : prev.finalized_at !== undefined && { finalized_at: prev.finalized_at }),
+      ...(delta.measurement_window !== undefined
+        ? { measurement_window: delta.measurement_window }
+        : prev.measurement_window !== undefined && { measurement_window: prev.measurement_window }),
     });
   },
 
