@@ -1,5 +1,6 @@
 import { PRODUCTS, PUBLISHER, type PurrProductConfig, type ProductAllowedAction } from '../config/purrsonality.ts';
 import { ordersStore } from '../stores/orders.ts';
+import { deliverySimStore, type DeliverySimRow } from '../stores/delivery-sim.ts';
 
 // The three states after which no further delivery maturation happens on this
 // reference seller. Shared so the finality stamp and the delivery projection
@@ -100,24 +101,7 @@ export interface MockDeliveryRow {
 
 const orders = new Map<string, MockOrder>();
 const requestKey = new Map<string, string>();
-const deliverySim = new Map<
-  string,
-  {
-    impressions: number;
-    clicks: number;
-    spend: number;
-    currency: string;
-    // Finality carried by the injected row itself, not derived from the
-    // order's lifecycle. billing_finality_delivery never forces the buy
-    // terminal — it injects a provisional row, reads it, then injects a
-    // final one carrying is_final/finalized_at/measurement_window and reads
-    // again. Deriving finality from order.status alone left the second read
-    // reporting is_final: false forever.
-    is_final?: boolean;
-    finalized_at?: string;
-    measurement_window?: string;
-  }
->();
+const deliverySim = new Map<string, DeliverySimRow>();
 const seededProducts = new Map<string, PurrProductConfig>();
 const seededCreatives = new Map<string, Record<string, unknown>>();
 let creativeSeq = 0;
@@ -586,7 +570,16 @@ export const mockUpstream = {
    * consumed by several call sites that have no business with finality. */
   getDeliveryFinality(
     orderId: string,
-  ): { is_final?: boolean; finalized_at?: string; measurement_window?: string } | undefined {
+  ):
+    | {
+        is_final?: boolean;
+        finalized_at?: string;
+        measurement_window?: string;
+        final_impressions?: number;
+        final_clicks?: number;
+        final_spend?: number;
+      }
+    | undefined {
     const sim = deliverySim.get(orderId);
     if (!sim) return undefined;
     if (sim.is_final === undefined && sim.finalized_at === undefined && sim.measurement_window === undefined) {
@@ -596,6 +589,9 @@ export const mockUpstream = {
       ...(sim.is_final !== undefined && { is_final: sim.is_final }),
       ...(sim.finalized_at !== undefined && { finalized_at: sim.finalized_at }),
       ...(sim.measurement_window !== undefined && { measurement_window: sim.measurement_window }),
+      ...(sim.final_impressions !== undefined && { final_impressions: sim.final_impressions }),
+      ...(sim.final_clicks !== undefined && { final_clicks: sim.final_clicks }),
+      ...(sim.final_spend !== undefined && { final_spend: sim.final_spend }),
     };
   },
 
@@ -813,25 +809,56 @@ export const mockUpstream = {
       spend: 0,
       currency: 'USD',
     };
-    // Counters accumulate; finality is last-write-wins. A later provisional
-    // injection legitimately walks a row back from final, so we carry the
-    // delta's value whenever it names one rather than latching true.
-    deliverySim.set(mediaBuyId, {
-      impressions: prev.impressions + (delta.impressions ?? 0),
-      clicks: prev.clicks + (delta.clicks ?? 0),
-      spend: prev.spend + (delta.spend ?? 0),
+    const impressions = prev.impressions + (delta.impressions ?? 0);
+    const clicks = prev.clicks + (delta.clicks ?? 0);
+    const spend = prev.spend + (delta.spend ?? 0);
+
+    // Finality is last-write-wins: a later provisional injection legitimately
+    // walks a row back. But a field the delta omits must NOT silently carry
+    // the previous injection's value into a different state — that is how a
+    // final row ended up labelled with the earlier provisional window. The
+    // window is therefore treated as belonging to the injection that set the
+    // finality, and is dropped whenever finality changes without it.
+    const finalityChanged = delta.is_final !== undefined && delta.is_final !== prev.is_final;
+    const measurementWindow = delta.measurement_window !== undefined
+      ? delta.measurement_window
+      : finalityChanged
+        ? undefined
+        : prev.measurement_window;
+    const isFinal = delta.is_final !== undefined ? delta.is_final : prev.is_final;
+    const finalizedAt = delta.finalized_at !== undefined
+      ? delta.finalized_at
+      : finalityChanged
+        ? undefined
+        : prev.finalized_at;
+
+    // Pin the counters at the moment a row becomes final. The sandbox read
+    // path recomputes impressions/spend from a pacing curve anchored on
+    // now(), so without this a row stamped is_final: true reported different
+    // numbers on every poll — the opposite of what billing-grade means.
+    const becameFinal = isFinal === true && prev.is_final !== true;
+    const row: DeliverySimRow = {
+      impressions,
+      clicks,
+      spend,
       currency: delta.currency ?? prev.currency,
-      ...(delta.is_final !== undefined
-        ? { is_final: delta.is_final }
-        : prev.is_final !== undefined && { is_final: prev.is_final }),
-      ...(delta.finalized_at !== undefined
-        ? { finalized_at: delta.finalized_at }
-        : prev.finalized_at !== undefined && { finalized_at: prev.finalized_at }),
-      ...(delta.measurement_window !== undefined
-        ? { measurement_window: delta.measurement_window }
-        : prev.measurement_window !== undefined && { measurement_window: prev.measurement_window }),
-    });
+      ...(isFinal !== undefined && { is_final: isFinal }),
+      ...(finalizedAt !== undefined && { finalized_at: finalizedAt }),
+      ...(measurementWindow !== undefined && { measurement_window: measurementWindow }),
+      ...(isFinal === true
+        ? becameFinal
+          ? { final_impressions: impressions, final_clicks: clicks, final_spend: spend }
+          : {
+              ...(prev.final_impressions !== undefined && { final_impressions: prev.final_impressions }),
+              ...(prev.final_clicks !== undefined && { final_clicks: prev.final_clicks }),
+              ...(prev.final_spend !== undefined && { final_spend: prev.final_spend }),
+            }
+        : {}),
+    };
+    deliverySim.set(mediaBuyId, row);
+    deliverySimStore.persist(mediaBuyId, row);
   },
+
 
   // Wipe all module-level state. Sandbox-only escape hatch for in-memory mode:
   // the compliance runner accumulates seeds across storyboards within one
@@ -851,6 +878,7 @@ export const mockUpstream = {
     orders.clear();
     requestKey.clear();
     deliverySim.clear();
+    deliverySimStore.clearAll();
     seededProducts.clear();
     seededCreatives.clear();
     seededFormats.clear();
@@ -867,6 +895,12 @@ export const mockUpstream = {
    * a redeploy. `orders` is module-scoped and never exported, so callers
    * cannot hydrate directly — this method is the only path in. */
   async hydrateOrdersFromPostgres(): Promise<number> {
-    return ordersStore.hydrate(orders);
+    const [orderCount] = await Promise.all([
+      ordersStore.hydrate(orders),
+      // Delivery simulation rows rehydrate alongside the orders they belong
+      // to; without this the injected finality was gone after any restart.
+      deliverySimStore.hydrate(deliverySim).catch(() => 0),
+    ]);
+    return orderCount;
   },
 };

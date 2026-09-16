@@ -100,6 +100,22 @@ const MOCK_ORDERS_MIGRATION = `
   CREATE INDEX IF NOT EXISTS mock_orders_network_code_idx ON mock_orders (network_code);
 `;
 
+// Delivery simulation rows injected by the comply controller
+// (simulate_delivery): accumulated counters plus the finality the injection
+// carried. Previously this lived only in a module-scoped Map, so it did not
+// survive a Fly suspend/wake and did not exist at all on a second machine —
+// which broke every inject-then-read storyboard, billing_finality_delivery
+// being the one that surfaced it. Same shape and lifecycle as mock_orders:
+// the Map stays the synchronous source of truth, this table is the write
+// shadow and the hydration source on boot.
+const MOCK_DELIVERY_SIM_MIGRATION = `
+  CREATE TABLE IF NOT EXISTS mock_delivery_sim (
+    media_buy_id TEXT PRIMARY KEY,
+    data JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+`;
+
 export async function runMigrations(): Promise<void> {
   const pool = getPool();
   if (!pool) {
@@ -122,5 +138,6 @@ export async function runMigrations(): Promise<void> {
   await pool.query(IMPRESSIONS_MIGRATION);
   await pool.query(AUDIT_CHAIN_STATE_MIGRATION);
   await pool.query(MOCK_ORDERS_MIGRATION);
+  await pool.query(MOCK_DELIVERY_SIM_MIGRATION);
   console.log('[db] Migrations complete.');
 }

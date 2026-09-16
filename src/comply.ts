@@ -2,6 +2,7 @@ import type { ComplyControllerConfig } from '@adcp/sdk/testing';
 import { TestControllerError } from '@adcp/sdk/server';
 import { mockUpstream } from './upstream/mock.ts';
 import { PUBLISHER } from './config/purrsonality.ts';
+import { MEASUREMENT_WINDOW_IDS } from './inventory/purrsonality.ts';
 import { dropTaskRecord } from './stores/index.ts';
 import { log } from './observability/logger.ts';
 
@@ -9,7 +10,7 @@ import { log } from './observability/logger.ts';
  * (see inventory/purrsonality.ts). The delivery response schema requires
  * by_package[].measurement_window to reference one of them, so an injected
  * window outside this set is rejected rather than echoed onto the wire. */
-const DECLARED_MEASUREMENT_WINDOWS = new Set(['post_givt', 'post_sivt']);
+const DECLARED_MEASUREMENT_WINDOWS = new Set<string>(MEASUREMENT_WINDOW_IDS);
 
 // `queryProvenanceAuditObservations` is an extension scenario landing in SDK
 // 9.x (adcp#2186); the 7.11.1 typed config doesn't expose it yet. We attach
@@ -526,8 +527,11 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
       // reporting_capabilities.measurement_windows — the response schema
       // requires it — and a bad is_final/finalized_at type would break
       // get-media-buy-delivery-response.json (boolean / date-time).
-      // Anything that fails a check is dropped, leaving the read path on its
-      // lifecycle derivation instead of emitting an invalid row.
+      // A field that fails its check is dropped from THIS injection. Note
+      // that dropping is not the same as clearing: addDelivery carries an
+      // earlier injection's value forward, so a rejected field leaves the
+      // previously stored one in place rather than falling back to the
+      // lifecycle derivation. Only a first bad injection falls back.
       const raw = params as unknown as Record<string, unknown>;
       const finality: {
         is_final?: boolean;
@@ -535,8 +539,16 @@ export const complyTest: ComplyControllerConfigWithProvenanceQuery = {
         measurement_window?: string;
       } = {};
       if (typeof raw['is_final'] === 'boolean') finality.is_final = raw['is_final'];
-      if (typeof raw['finalized_at'] === 'string' && !Number.isNaN(Date.parse(raw['finalized_at']))) {
-        finality.finalized_at = raw['finalized_at'];
+      // Date.parse is not an RFC 3339 check — V8 accepts 'March 5, 2026',
+      // '9/15/2026' and even '2026', any of which would then be echoed into
+      // a field the schema declares as format: date-time. Require the value
+      // to round-trip through toISOString instead.
+      const finalizedAt = raw['finalized_at'];
+      if (typeof finalizedAt === 'string') {
+        const parsed = new Date(finalizedAt);
+        if (!Number.isNaN(parsed.getTime()) && /^\d{4}-\d{2}-\d{2}T/.test(finalizedAt)) {
+          finality.finalized_at = parsed.toISOString();
+        }
       }
       if (typeof raw['measurement_window'] === 'string' && DECLARED_MEASUREMENT_WINDOWS.has(raw['measurement_window'])) {
         finality.measurement_window = raw['measurement_window'];

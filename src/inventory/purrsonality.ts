@@ -57,6 +57,12 @@ import {
   resolveBuyAvailableActions,
 } from './actions.ts';
 
+/* The window_ids this seller declares in reporting_capabilities below.
+ * Exported so the comply controller validates injected measurement_window
+ * against the same list rather than a hand-copied duplicate that drifts the
+ * moment a window is added. */
+export const MEASUREMENT_WINDOW_IDS = ['post_givt', 'post_sivt'] as const;
+
 function hashAccountId(id: string | null | undefined): string | null {
   if (!id) return null;
   // Same 8-char prefix as observability/wrap.ts so audit + creative views
@@ -1402,6 +1408,9 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       let currency: string;
       let pacingIndex: number;
 
+      // Resolved before the counter branches: finality decides which counters
+      // are authoritative, not the other way round.
+      const injectedFinality = mockUpstream.getDeliveryFinality(id);
       const real = realStats[id] ?? { impressions: 0, clicks: 0, last_at: null };
       if (real.impressions > 0 || real.clicks > 0) {
         // Real adserver traffic wins. Spend derives from impressions at the
@@ -1410,6 +1419,17 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         impressions = real.impressions;
         clicks = real.clicks;
         spend = +(impressions * cpm / 1000).toFixed(2);
+        currency = order?.currency ?? 'USD';
+        pacingIndex = 1.0;
+      } else if (injectedFinality?.final_impressions !== undefined) {
+        // A row the controller marked final reports the counters captured at
+        // that moment. The sandbox branch below recomputes from a pacing
+        // curve anchored on now(), so letting it run for a final row made the
+        // "billing-grade" numbers move on every poll and match neither the
+        // injection nor the report_usage record the buyer submits against it.
+        impressions = injectedFinality.final_impressions;
+        clicks = injectedFinality.final_clicks ?? 0;
+        spend = injectedFinality.final_spend ?? 0;
         currency = order?.currency ?? 'USD';
         pacingIndex = 1.0;
       } else if (isSandbox && order) {
@@ -1479,7 +1499,6 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // never satisfy its second read. When nothing was injected we fall
       // back to the lifecycle rule, which is what every other storyboard
       // and the live path rely on.
-      const injected = mockUpstream.getDeliveryFinality(id);
       const lifecycleIsFinal = order != null && TERMINAL_ORDER_STATUSES.has(order.status);
       // Either signal alone makes the row final; neither can veto the other.
       // `injected?.is_final ?? lifecycleIsFinal` was wrong: ?? only falls
@@ -1487,13 +1506,13 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // billing_finality_delivery (is_final: false) latched false for the
       // process lifetime and a buy later driven terminal would still report
       // is_final: false and drop its finalized_at stamp.
-      const buyIsFinal = injected?.is_final === true || lifecycleIsFinal;
+      const buyIsFinal = injectedFinality?.is_final === true || lifecycleIsFinal;
       // Honour the injected window only while the injection still describes
       // the state we are reporting. A stale provisional injection must not
       // label a terminal buy's row post_givt.
       const deliveryWindow =
-        injected?.measurement_window !== undefined && injected.is_final === buyIsFinal
-          ? injected.measurement_window
+        injectedFinality?.measurement_window !== undefined
+          ? injectedFinality.measurement_window
           : buyIsFinal
             ? 'post_sivt'
             : 'post_givt';
@@ -1503,7 +1522,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // below would disagree within one response. Falls back to canceled_at
       // for orders closed through updateOrder before this stamp existed.
       const finalizedAt = buyIsFinal
-        ? (injected?.finalized_at ?? order?.finalized_at ?? order?.canceled_at ?? order?.created_at)
+        ? (injectedFinality?.finalized_at ?? order?.finalized_at ?? order?.canceled_at)
         : undefined;
       return {
         media_buy_id: id,
