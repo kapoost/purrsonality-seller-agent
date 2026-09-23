@@ -306,11 +306,11 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       });
     }
     const products = raw.map((p) => {
-      // Multi-pricing-option products (3.1 pricing_currency_filter seeds
-      // USD + EUR rows): emit ALL pricing_options[] via buildPricingOption,
-      // pruned to filters.pricing_currencies when provided. Legacy
-      // single-pricing-option products (purr_result_card_v1, sales-non-
-      // guaranteed `cpm_auction` seeded fixture) keep the prior shorthand.
+      // Products carrying pricing_options[] (every controller-seeded fixture,
+      // plus the 3.1 pricing_currency_filter USD + EUR seeds) emit those rows
+      // via buildPricingOption, pruned to filters.pricing_currencies and
+      // filters.is_fixed_price when provided. Only the default catalog, which
+      // declares a bare min_cpm, takes the shorthand.
       const multiPricing = p.pricing_options && p.pricing_options.length > 0
         ? p.pricing_options.filter((po) => !wantedCurrencies || wantedCurrencies.length === 0 || wantedCurrencies.includes(po.currency))
         : null;
@@ -325,14 +325,58 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // the percentiles monotonic and above the floor, which is the property a
       // bidder relies on. Fixed-price options get none — the field is auction
       // guidance and means nothing on a fixed rate.
-      const auctionGuidance = (floor: number) => ({
-        p25: Number((floor * 1.1).toFixed(2)),
-        p50: Number((floor * 1.3).toFixed(2)),
-        p75: Number((floor * 1.6).toFixed(2)),
-        p90: Number((floor * 2.0).toFixed(2)),
-      });
-      const pricing = multiPricing
-        ? multiPricing.map((po) => {
+      // Rounding to cents can collapse the multipliers into each other on a
+      // small floor (at floor 0.01, 1.1x and 1.3x both round to 0.01), which
+      // would break the very invariant the comment above promises. Walk the
+      // percentiles upward with a one-cent minimum tick so each is strictly
+      // greater than the previous and the first is strictly above the floor.
+      const auctionGuidance = (floor: number) => {
+        const tick = 0.01;
+        let prev = floor;
+        const next = (multiplier: number) => {
+          const value = Math.max(Number((floor * multiplier).toFixed(2)), Number((prev + tick).toFixed(2)));
+          prev = value;
+          return value;
+        };
+        return { p25: next(1.1), p50: next(1.3), p75: next(1.6), p90: next(2.0) };
+      };
+      // `is_fixed_price` is a filter on pricing_options, not just a hint: the
+      // 3.1 ProductFilters contract is that a seller returns only the entries
+      // matching the requested pricing type. Applies to both shapes below.
+      const rowMatchesPricingFilter = (row: { fixed_price?: number; floor_price?: number }) =>
+        wantsFixedPrice === undefined
+        || (wantsFixedPrice ? row.fixed_price !== undefined : row.floor_price !== undefined);
+      // Stable pricing_option_id. buildPricingOption reads `id` and derives
+      // `${model}_${fixed|floor}_${amount}` when it is absent, so leaving it to
+      // the SDK would make the id swing with the requested shape and break any
+      // buyer that discovered one shape and bought against the other. Pin it to
+      // the product's declared default instead.
+      const defaultOptionId = p.pricing_option_id
+        ?? `cpm_${p.pricing_kind === 'floor' ? 'floor' : 'fixed'}_${p.min_cpm}`;
+      // Every controller-seeded fixture reaches this branch, not the shorthand
+      // below: comply.ts appends to pricing_options[] on every seed call, so a
+      // seeded product always has a non-empty array. The pricing filter has to
+      // be applied here too, or a fixture seeded fixed and discovered with
+      // is_fixed_price:false answers with the fixed row and no price_guidance.
+      const matchingPricing = multiPricing ? multiPricing.filter(rowMatchesPricingFilter) : null;
+      // Emit the product's inventory in the shape the buyer asked for. The
+      // fallback covers a filter that matches none of the seeded rows — the
+      // same inventory is sellable either way, so answer from the product's
+      // base rate rather than returning a product with no pricing at all.
+      const useAuctionShape = wantsFixedPrice !== undefined
+        ? wantsFixedPrice === false
+        : p.pricing_kind === 'floor';
+      const shorthandPricing = useAuctionShape
+        ? {
+            model: 'cpm' as const,
+            floor: p.min_cpm,
+            currency: p.currency,
+            id: defaultOptionId,
+            price_guidance: auctionGuidance(p.min_cpm),
+          }
+        : { model: 'cpm' as const, fixed: p.min_cpm, currency: p.currency, id: defaultOptionId };
+      const pricing = matchingPricing && matchingPricing.length > 0
+        ? matchingPricing.map((po) => {
             const option = buildPricingOption({
               id: po.pricing_option_id,
               model: po.pricing_model as 'cpm',
@@ -346,15 +390,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
             }
             return option;
           })
-        : ((wantsFixedPrice === false || p.pricing_kind === 'floor')
-          ? {
-              model: 'cpm' as const,
-              floor: p.min_cpm,
-              currency: p.currency,
-              pricing_option_id: p.pricing_option_id,
-              price_guidance: auctionGuidance(p.min_cpm),
-            }
-          : { model: 'cpm' as const, fixed: p.min_cpm, currency: p.currency, ...(p.pricing_option_id && { pricing_option_id: p.pricing_option_id }) });
+        : shorthandPricing;
       // 3.1 canonical_formats — buildProduct now takes canonical
       // format_options directly. We resolve every legacy bare id via
       // canonicalDeclarationFromBareId (SDK helper that owns the id→canonical
