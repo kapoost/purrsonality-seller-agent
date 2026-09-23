@@ -147,12 +147,6 @@ export const PRODUCTS: readonly PurrProductConfig[] = [
     format_ids: ['display_300x250', 'display_responsive'],
     ad_unit_ids: ['purrsonality/landing_page'],
     min_cpm: 1.0,
-    // sales-non-guaranteed is an auction specialism: the honest shape for this
-    // inventory is a floor plus guidance on where bids actually clear, not a
-    // fixed rate. `floor` routes getProducts through auctionGuidance() so
-    // pricing_options[0].price_guidance carries p25/p50/p75/p90, which
-    // sales_non_guaranteed reads as the buyer's opening bid.
-    pricing_kind: 'floor',
     currency: 'USD',
     min_spend: 100,
     estimated_impressions_per_month: 250_000,
@@ -176,12 +170,6 @@ export const PRODUCTS: readonly PurrProductConfig[] = [
     format_ids: ['display_300x250', 'display_responsive'],
     ad_unit_ids: ['purrsonality/result_page'],
     min_cpm: 1.5,
-    // sales-non-guaranteed is an auction specialism: the honest shape for this
-    // inventory is a floor plus guidance on where bids actually clear, not a
-    // fixed rate. `floor` routes getProducts through auctionGuidance() so
-    // pricing_options[0].price_guidance carries p25/p50/p75/p90, which
-    // sales_non_guaranteed reads as the buyer's opening bid.
-    pricing_kind: 'floor',
     currency: 'USD',
     min_spend: 100,
     estimated_impressions_per_month: 100_000,

@@ -192,6 +192,11 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         // reporting_capabilities.available_metrics. Products missing any
         // requested metric are silently excluded.
         required_metrics?: readonly string[];
+        // 3.1 pricing-shape filter. `true` asks for a fixed rate card,
+        // `false` asks for auction inventory (floor + price_guidance).
+        // Omitted means the buyer doesn't care and we answer with the
+        // product's declared default.
+        is_fixed_price?: boolean;
       };
     };
     // 3.1 pricing_currency_filter is the only storyboard that asserts
@@ -269,6 +274,13 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
     // AND mandatory product-scoped signal pricing. Optional signal pricing is
     // explicitly out of scope (spec: "Buyers remain responsible for avoiding
     // optional add-on prices they cannot transact in").
+    // sales_non_guaranteed asks for `is_fixed_price: false` and then reads
+    // pricing_options[0].price_guidance.p50 as its opening bid;
+    // invalid_transitions and measurement_terms_rejected ask for
+    // `is_fixed_price: true` and read pricing_options[0].fixed_price. The same
+    // inventory is genuinely sellable both ways, so answer in the shape the
+    // buyer asked for instead of picking one and failing the other.
+    const wantsFixedPrice = r.filters?.is_fixed_price;
     const wantedCurrencies = r.filters?.pricing_currencies;
     if (wantedCurrencies && wantedCurrencies.length > 0) {
       const wanted = new Set(wantedCurrencies);
@@ -334,7 +346,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
             }
             return option;
           })
-        : (p.pricing_kind === 'floor'
+        : ((wantsFixedPrice === false || p.pricing_kind === 'floor')
           ? {
               model: 'cpm' as const,
               floor: p.min_cpm,
