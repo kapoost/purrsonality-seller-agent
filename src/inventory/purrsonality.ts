@@ -453,6 +453,22 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
           ],
         } as unknown as Parameters<typeof buildProduct>[0]['reporting_capabilities'],
       });
+      // `price_guidance` survives neither buildProduct's pricing shorthand nor
+      // buildPricingOption: BuildPricingOptionInput (13.0.4) whitelists only
+      // id/model/fixed/floor/currency/min_spend_per_package, so the field is
+      // dropped during assembly. Re-attach it here, the same way
+      // measurement_terms and creative_policy are re-attached below.
+      const builtOptions = (base as unknown as {
+        pricing_options?: Array<Record<string, unknown>>;
+      }).pricing_options;
+      if (builtOptions) {
+        for (const opt of builtOptions) {
+          const floorPrice = opt.floor_price;
+          if (typeof floorPrice === 'number' && opt.price_guidance === undefined) {
+            opt.price_guidance = auctionGuidance(floorPrice);
+          }
+        }
+      }
       if (p.allowed_actions && p.allowed_actions.length > 0) {
         (base as unknown as { allowed_actions: readonly unknown[] }).allowed_actions = p.allowed_actions;
       }
