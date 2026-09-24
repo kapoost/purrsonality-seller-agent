@@ -1197,6 +1197,10 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         package_id?: string;
         paused?: boolean;
         budget?: number;
+        // update-media-buy-request.json carries bid_price on the package patch;
+        // it was absent from this local shape, so the value never reached the
+        // handler even though buyers were allowed to send it.
+        bid_price?: number;
         creative_assignments?: ReadonlyArray<{ creative_id: string }>;
       }>;
     };
@@ -1305,15 +1309,24 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
 
     if (p.packages) {
       const budgetPatch: Record<string, number> = {};
+      const bidPatch: Record<string, number> = {};
       for (const pkgPatch of p.packages) {
-        if (typeof pkgPatch.budget !== 'number' || !pkgPatch.package_id) continue;
+        if (!pkgPatch.package_id) continue;
         const productId = pkgPatch.package_id.startsWith(`${buyId}_`)
           ? pkgPatch.package_id.slice(`${buyId}_`.length)
           : pkgPatch.package_id;
-        budgetPatch[productId] = pkgPatch.budget;
+        if (typeof pkgPatch.budget === 'number') budgetPatch[productId] = pkgPatch.budget;
+        // bid_price was accepted and silently dropped: nothing persisted it, so
+        // an adjust-bids update was a no-op and the new bid could not be read
+        // back. Non-guaranteed inventory is exactly where moving the bid has to
+        // stick, so persist it next to the budget.
+        if (typeof pkgPatch.bid_price === 'number') bidPatch[productId] = pkgPatch.bid_price;
       }
-      if (Object.keys(budgetPatch).length > 0) {
-        mockUpstream.updateOrder(buyId, { package_budgets: budgetPatch });
+      if (Object.keys(budgetPatch).length > 0 || Object.keys(bidPatch).length > 0) {
+        mockUpstream.updateOrder(buyId, {
+          ...(Object.keys(budgetPatch).length > 0 && { package_budgets: budgetPatch }),
+          ...(Object.keys(bidPatch).length > 0 && { package_bids: bidPatch }),
+        });
       }
     }
 
@@ -1327,6 +1340,8 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       package_id: string;
       product_id: string;
       pricing_option_id: string;
+      bid_price?: number;
+      budget?: number;
       creative_assignments?: ReadonlyArray<{ creative_id: string }>;
       targeting_overlay?: {
         property_list?: { agent_url: string; list_id: string };
@@ -1357,7 +1372,13 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         const hasTargetingOverlayPatch = pkgPatchAny.targeting_overlay
           && (pkgPatchAny.targeting_overlay.property_list?.list_id
             || pkgPatchAny.targeting_overlay.collection_list?.list_id);
-        if (!hasCreativeAssignmentsPatch && !hasTargetingOverlayPatch) continue;
+        // A bid- or budget-only patch mutates the package just as much as a
+        // creative or targeting patch does, and sales_non_guaranteed/adjust_bids
+        // asserts field_present on affected_packages for exactly that request.
+        // Skipping it here left the accumulator empty and the field omitted.
+        const hasPricingPatch = typeof pkgPatch.bid_price === 'number'
+          || typeof pkgPatch.budget === 'number';
+        if (!hasCreativeAssignmentsPatch && !hasTargetingOverlayPatch && !hasPricingPatch) continue;
 
         if (hasCreativeAssignmentsPatch) {
           mockUpstream.setPackageCreativeAssignments(
@@ -1390,10 +1411,17 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
         // post-update targeting_overlay snapshot on affected_packages so
         // buyers see the replacement landed without a follow-up read.
         const overlayAfterWrite = mockUpstream.getOrder(buyId)?.package_overlays?.[productId];
+        // Post-update values, read back from the store rather than echoed from
+        // the request, so the response reflects what actually landed.
+        const orderAfterWrite = mockUpstream.getOrder(buyId);
+        const bidAfterWrite = orderAfterWrite?.package_bids?.[productId];
+        const budgetAfterWrite = orderAfterWrite?.package_budgets?.[productId];
         affectedPackagesAcc.push({
           package_id: pkgPatch.package_id,
           product_id: productId,
           pricing_option_id: pricingOptionId,
+          ...(typeof bidAfterWrite === 'number' && { bid_price: bidAfterWrite }),
+          ...(typeof budgetAfterWrite === 'number' && { budget: budgetAfterWrite }),
           ...(hasCreativeAssignmentsPatch && {
             creative_assignments: [...(pkgPatch.creative_assignments ?? [])],
           }),

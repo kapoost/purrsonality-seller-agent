@@ -26,6 +26,10 @@ export interface MockOrder {
   client_request_id?: string;
   package_overlays?: Record<string, PackageOverlay>;
   package_budgets?: Record<string, number>;
+  // Per-package bid prices. Mirrors package_budgets: update_media_buy may move
+  // the bid on a non-guaranteed package, and sales_non_guaranteed/adjust_bids
+  // reads the post-update value back off affected_packages[*].bid_price.
+  package_bids?: Record<string, number>;
   // Buyer-supplied context echoed back by get_media_buys (3.1 storyboards
   // check_buy_status, pending_creatives_to_start/get_media_buy_after_sync).
   context?: { correlation_id?: string; buyer_ref?: string };
@@ -451,14 +455,18 @@ export const mockUpstream = {
     id: string,
     patch: Partial<Pick<MockOrder, 'status' | 'budget' | 'pacing' | 'flight_end' | 'flight_start' | 'canceled_by' | 'canceled_at'>> & {
       package_budgets?: Record<string, number>;
+      package_bids?: Record<string, number>;
     },
   ): MockOrder | undefined {
     const o = orders.get(id);
     if (!o) return undefined;
-    const { package_budgets, ...rest } = patch;
+    const { package_budgets, package_bids, ...rest } = patch;
     Object.assign(o, rest);
     if (package_budgets) {
       o.package_budgets = { ...(o.package_budgets ?? {}), ...package_budgets };
+    }
+    if (package_bids) {
+      o.package_bids = { ...(o.package_bids ?? {}), ...package_bids };
     }
     ordersStore.persist(o);
     return o;
