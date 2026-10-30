@@ -110,15 +110,23 @@ test.describe('demo serve endpoints', () => {
     const csp = res.headers.get('content-security-policy');
     expect(csp).toContain('frame-ancestors');
     expect(csp).toContain('purrsonality.pages.dev');
-    // Body serves the seeded creative, not the broken-asset placeholder.
+    // Body serves a real approved creative, not the broken-asset placeholder.
+    //
+    // Deliberately NOT asserting that OUR creative won: the slot shuffles the
+    // five newest matching candidates so every active buyer gets airtime, and
+    // the rest of this suite seeds creatives that inline just as well. Pinning
+    // the winner made this test fail roughly one run in three.
+    //
+    // The placeholder branch is what we actually need to exclude, and it is
+    // distinguishable: a served creative links to
+    // /click/live-<placement>-slot?creative_id=<id>, while both fallbacks link
+    // to the marketing site. The "AdCP protocol" badge is NOT that proof — it
+    // stays violet when every candidate in the bucket failed to inline.
     const html = await res.text();
     expect(html).toContain('<img');
-    expect(html).toContain(PROBE_PNG_DATA_URL);
-    expect(html).toContain('/click/live-result-slot');
-    // "AdCP protocol" alone is not proof of a served creative — the badge
-    // stays violet whenever the bucket had any AdCP candidate, including when
-    // every one of them failed to inline. The data: URL above is the proof.
-    expect(html).toContain('AdCP protocol');
+    expect(html).toContain('src="data:image/');
+    expect(html).toMatch(/\/click\/live-result-slot\?creative_id=/);
+    expect(html).not.toContain('alt="Purrsonality — AdCP slot"');
   });
 
   test('/preview/<sandbox-auto-approved> serves HTML with image', async () => {

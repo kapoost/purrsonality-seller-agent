@@ -348,6 +348,10 @@ export const mockUpstream = {
     seededFormats.set(id, { ...fixture, format_id: id, _account_id: accountId });
   },
 
+  getSeededFormat(id: string): Record<string, unknown> | undefined {
+    return seededFormats.get(id);
+  },
+
   listSeededFormats(accountId?: string): Array<Record<string, unknown>> {
     const all = [...seededFormats.values()];
     if (!accountId) return all;

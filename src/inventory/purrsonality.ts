@@ -2199,9 +2199,30 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       // at an agent not on creative_policy.accepted_verifiers. The seller MUST
       // refuse to call the off-list URL and surface the offending JSON pointer
       // so the buyer can correct the submission.
+      // The allowlist is whatever WE published on the product's
+      // creative_policy.accepted_verifiers — the storyboard contract is
+      // "seller publishes via get_products, then cross-checks the submission
+      // against its own published list". Reading a hardcoded constant here let
+      // the two drift: AdCP 3.1.30 moved the provenance fixtures onto the
+      // public conformance verifier
+      // (test-agent.adcontextprotocol.org/governance/creative-features/mcp),
+      // which we publish correctly when the storyboard seeds the product but
+      // then rejected on submission, failing truth_of_claim and
+      // audit_observation. ENCYPHER_VERIFIER_URL stays as the default-catalog
+      // entry, not as the only acceptable value.
+      const acceptedVerifierUrls = new Set<string>([ENCYPHER_VERIFIER_URL]);
+      for (const seeded of mockUpstream.listSeededProducts()) {
+        const policy = (seeded as { creative_policy?: { accepted_verifiers?: Array<{ agent_url?: unknown }> } }).creative_policy;
+        for (const entry of policy?.accepted_verifiers ?? []) {
+          if (typeof entry?.agent_url === 'string' && entry.agent_url.length > 0) {
+            acceptedVerifierUrls.add(entry.agent_url);
+          }
+        }
+      }
+
       const embeddedProvenance = (provenance as { embedded_provenance?: Array<{ verify_agent?: { agent_url?: string } }> }).embedded_provenance ?? [];
       const offListIdx = embeddedProvenance.findIndex(
-        (entry) => entry.verify_agent?.agent_url && entry.verify_agent.agent_url !== ENCYPHER_VERIFIER_URL,
+        (entry) => entry.verify_agent?.agent_url && !acceptedVerifierUrls.has(entry.verify_agent.agent_url),
       );
       if (offListIdx >= 0) {
         const offendingUrl = embeddedProvenance[offListIdx]?.verify_agent?.agent_url;
@@ -2216,7 +2237,7 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
               recovery: 'correctable',
               details: {
                 offered_agent_url: offendingUrl,
-                accepted_verifiers: [ENCYPHER_VERIFIER_URL],
+                accepted_verifiers: [...acceptedVerifierUrls],
               },
             },
           ],

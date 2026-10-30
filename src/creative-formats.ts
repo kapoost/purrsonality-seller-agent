@@ -25,6 +25,7 @@
 // proxying several creative agents would need owner-scoped resolution.
 import { canonicalDeclarationFromBareId, nativeInFeedFormatDeclaration } from '@adcp/sdk/v2/projection';
 import type { LegacyFormatConverter } from '@adcp/sdk';
+import { mockUpstream } from './upstream/mock.ts';
 
 // The native_in_feed constraints this seller enforces, in one place so what the
 // format declaration publishes and what the sync handler rejects cannot drift.
@@ -106,7 +107,45 @@ export const legacyCreativeFormatConverter: LegacyFormatConverter = ({ formatId 
     }
   }
 
+  // Storyboards seed their own formats through `comply_test_controller`
+  // (`fixtures.creative_formats`), and those ids are deliberately not catalogue
+  // ids — AdCP 3.1.30's provenance scenarios all submit against
+  // `provenance_display_300x250`. `canonicalDeclarationFromBareId` returns null
+  // for them, so before 2026-10-30 the fail-closed branch below rejected the
+  // whole sync_creatives response and took every provenance scenario with it
+  // (4 of the seller's 5 AAO failures, one cause).
+  //
+  // The seed carries a full declaration, so there is nothing to guess: read the
+  // required image asset's own dimensions and resolve the catalogue entry for
+  // that size. The declaration still comes from the catalogue — we are only
+  // using the seeded fixture to work out which entry it describes.
+  const seededDecl = declarationFromSeededFormat(id);
+  if (seededDecl != null) return seededDecl;
+
   // Fail closed. A wrong declaration is worse than a refused one: it would put a
   // shape on the wire that no catalog backs, and buyers would build against it.
   return null;
 };
+
+// Narrow reader over a seeded `fixtures.creative_formats` entry. Returns null
+// for anything we cannot back with a real catalogue entry, so an unrecognised
+// seed still fails closed rather than inventing a shape.
+function declarationFromSeededFormat(id: string): Declaration | null {
+  const seeded = mockUpstream.getSeededFormat(id);
+  if (seeded == null) return null;
+
+  const type = typeof seeded['type'] === 'string' ? (seeded['type'] as string).toLowerCase() : '';
+  if (type !== 'display' && type !== 'image') return null;
+
+  const assets = Array.isArray(seeded['assets']) ? (seeded['assets'] as Array<Record<string, unknown>>) : [];
+  for (const asset of assets) {
+    if (asset?.['asset_type'] !== 'image') continue;
+    const req = asset['image_requirements'] as { width?: unknown; height?: unknown } | undefined;
+    const width = typeof req?.width === 'number' ? req.width : undefined;
+    const height = typeof req?.height === 'number' ? req.height : undefined;
+    if (width === undefined || height === undefined) continue;
+    const decl = canonicalDeclarationFromBareId(`display_${width}x${height}`);
+    if (decl != null) return withoutLegacyRef(decl as Declaration);
+  }
+  return null;
+}
