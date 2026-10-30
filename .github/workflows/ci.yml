@@ -50,11 +50,30 @@ jobs:
             -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci-smoke","version":"1.0"}}}' > /dev/null
           echo "Seller agent up"
 
+      - name: Resolve bundled 3.1 compliance cache
+        id: cache
+        run: |
+          # The SDK bundles one stable 3.1.x cache and renames it on every bump
+          # (3.1.0 -> 3.1.20 -> 3.1.30). Hardcoding the directory silently rots:
+          # a missing --test-kit path failed this job from 2026-06-27 to
+          # 2026-10-30 while still reporting as a gate. Resolve it instead.
+          DIR=$(ls -d node_modules/@adcp/sdk/compliance/cache/3.1.* \
+                | grep -v -- '-beta' | sort -V | tail -1)
+          KIT="$DIR/test-kits/acme-outdoor.yaml"
+          if [ ! -f "$KIT" ]; then
+            echo "::error::No acme-outdoor test kit under $DIR. Bundled caches:"
+            ls -1 node_modules/@adcp/sdk/compliance/cache/ || true
+            exit 1
+          fi
+          echo "version=$(basename "$DIR")" >> $GITHUB_OUTPUT
+          echo "kit=$KIT" >> $GITHUB_OUTPUT
+          echo "Using compliance cache $(basename "$DIR")"
+
       - name: Run AdCP storyboard suite
         run: |
           bunx adcp storyboard run http://127.0.0.1:3001/mcp \
             --auth $ADCP_TEST_TOKEN \
-            --test-kit node_modules/@adcp/sdk/compliance/cache/3.1.0/test-kits/acme-outdoor.yaml \
+            --test-kit "${{ steps.cache.outputs.kit }}" \
             --allow-http \
             --timeout 180 \
             --summary-output /tmp/summary.json 2>&1 | tee /tmp/storyboard.out
@@ -66,35 +85,45 @@ jobs:
           FAILED=$(jq -r '.failed' /tmp/summary.json)
           echo "passed=$PASSED" >> $GITHUB_OUTPUT
           echo "failed=$FAILED" >> $GITHUB_OUTPUT
-          echo "## Storyboard Result (cache 3.1.0)" >> $GITHUB_STEP_SUMMARY
+          echo "## Storyboard Result (cache ${{ steps.cache.outputs.version }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
           echo "| Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
-          echo "| Pass threshold | 240 |" >> $GITHUB_STEP_SUMMARY
-          echo "| Fail threshold | 5 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pass threshold | 78 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Fail threshold | 2 |" >> $GITHUB_STEP_SUMMARY
 
-      - name: Regression guard (must pass ≥240, fail ≤5)
+      - name: Regression guard (must pass ≥78, fail ≤2)
         run: |
           PASSED=${{ steps.parse.outputs.passed }}
           FAILED=${{ steps.parse.outputs.failed }}
-          # Baseline locked 2026-06-27 against cache 3.1.0 acme-outdoor:
-          #   pass=246, fail=3, skip=83
-          # Pass floor 240 = 6-scenario slack against the measured baseline.
-          # Fail ceiling 5 = covers the 3 measured + 2 upstream-blocked fails
-          # that can surface depending on test-kit auth (billing_gate
-          # demo-billing-passthrough-v1, deny_live_caller, pagination
-          # seed_account #5723, dependency_impairment #5707).
-          if [ "$PASSED" -lt 240 ]; then
-            echo "::error::Regression: $PASSED < 240 baseline. Investigate failed storyboards before merging."
+          # Baseline re-locked 2026-10-30 against cache 3.1.30 acme-outdoor on
+          # @adcp/sdk 13.1.4, in-memory store, two consecutive runs:
+          #   pass=81, fail=0, skip=45, not_selected=7 (version_excluded)
+          #
+          # The previous floor (240) came from cache 3.1.0 on 2026-06-27. That
+          # cache stopped shipping, so the step errored on a missing path and
+          # the job stayed red from then until 2026-10-30 — a gate that fails
+          # unconditionally reports exactly as much as no gate at all. The step
+          # counts are not comparable across cache generations: 3.1.30 selects
+          # a smaller set for a single-publisher sales-non-guaranteed seller.
+          #
+          # Pass floor 78 = 3-step slack against the measured 81.
+          # Fail ceiling 2 = headroom for the two auth-dependent fails that can
+          # surface on the AAO test-kit bearer (billing_gate
+          # demo-billing-passthrough-v1, comply_controller_mode_gate
+          # deny_live_caller — grader substitutes a sandbox bearer, our side
+          # verified correct 2026-09-23). Both measured 0 here.
+          if [ "$PASSED" -lt 78 ]; then
+            echo "::error::Regression: $PASSED < 78 baseline (cache ${{ steps.cache.outputs.version }}). Investigate failed storyboards before merging."
             exit 1
           fi
-          if [ "$FAILED" -gt 5 ]; then
-            echo "::error::New failure: $FAILED > 5 baseline. Known upstream blockers: pagination_integrity_list_accounts (adcp#5723 P0 — seed_account UNKNOWN_SCENARIO), dependency_impairment (adcp#5707 — transition.from SHOULD vs MUST). Local-only: billing_gate_dispatch (AAO test-kit bearer mismatch), comply_controller_mode_gate (FORBIDDEN code on live caller). Investigate any new fail."
+          if [ "$FAILED" -gt 2 ]; then
+            echo "::error::New failure: $FAILED > 2 baseline. Auth-dependent knowns: billing_gate_dispatch (AAO test-kit bearer mismatch), comply_controller_mode_gate (FORBIDDEN code on live caller). Investigate any new fail."
             exit 1
           fi
-          echo "OK: $PASSED passed ≥ 240 baseline, $FAILED failed ≤ 5 baseline"
+          echo "OK: $PASSED passed ≥ 78 baseline, $FAILED failed ≤ 2 baseline (cache ${{ steps.cache.outputs.version }})"
 
       - name: Stop seller agent
         if: always()

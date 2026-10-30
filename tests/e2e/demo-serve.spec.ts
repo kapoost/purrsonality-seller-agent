@@ -2,6 +2,12 @@
 
 import { test, expect, mcpCall, SERVER_URLS, TEST_ADMIN_TOKEN, TEST_SANDBOX_TOKEN } from './fixtures/seller.ts';
 
+// 1x1 transparent PNG. Inlined verbatim by the live-slot asset probe, so a
+// seeded creative is actually selectable in a test environment with no
+// reachable image host.
+const PROBE_PNG_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
 test.describe('demo serve endpoints', () => {
   test('agent.json + healthz public, no auth', async () => {
     const card = await fetch(SERVER_URLS.agentCard);
@@ -22,15 +28,28 @@ test.describe('demo serve endpoints', () => {
     expect(body.bills_through_adcp).toBe(false);
   });
 
-  test('signed-requests specialism: jwks + capability advertised', async () => {
+  // The `signed-requests` specialism was dropped in c2c4456 and signing moved
+  // from required to optional in 1a1bcba (`required_for: []`), the Phase 1
+  // trade-off that lets the media_buy_seller track run on bearer auth — see
+  // src/platform.ts. This test asserted the pre-c2c4456 posture and had been
+  // failing ever since; it now pins the posture we actually intend: signing
+  // offered on the write tasks, never demanded.
+  test('request signing: offered but not required, jwks advertised', async () => {
     const caps = await fetch(SERVER_URLS.adcpCapabilities);
     const capsBody = await caps.json() as {
       specialisms?: string[];
-      request_signing?: { supported?: boolean; required_for?: string[]; covers_content_digest?: string };
+      request_signing?: {
+        supported?: boolean;
+        required_for?: string[];
+        supported_for?: string[];
+        covers_content_digest?: string;
+      };
     };
-    expect(capsBody.specialisms).toContain('signed-requests');
+    expect(capsBody.specialisms).toContain('sales-non-guaranteed');
+    expect(capsBody.specialisms).not.toContain('signed-requests');
     expect(capsBody.request_signing?.supported).toBe(true);
-    expect(capsBody.request_signing?.required_for).toEqual(
+    expect(capsBody.request_signing?.required_for).toEqual([]);
+    expect(capsBody.request_signing?.supported_for).toEqual(
       expect.arrayContaining(['create_media_buy', 'update_media_buy']),
     );
 
@@ -65,7 +84,12 @@ test.describe('demo serve endpoints', () => {
           name: 'E2E live slot',
           format_id: { id: 'display_300x250', agent_url: `${SERVER_URLS.publicBase}/mcp` },
           assets: {
-            image: { asset_type: 'image', url: 'https://example.com/banner.png', width: 300, height: 250 },
+            // The slot inlines the image and skips any candidate whose URL
+            // does not resolve to image/* — a dead `.example` host can never
+            // be served, so asserting on a remote URL could not pass. A data:
+            // URL short-circuits inlineAsDataUrl, which exercises the real
+            // selection path instead of the broken-asset fallback.
+            image: { asset_type: 'image', url: PROBE_PNG_DATA_URL, width: 300, height: 250 },
             click_url: { asset_type: 'url', url: 'https://example.com/landing' },
           },
           provenance: {
@@ -86,11 +110,15 @@ test.describe('demo serve endpoints', () => {
     const csp = res.headers.get('content-security-policy');
     expect(csp).toContain('frame-ancestors');
     expect(csp).toContain('purrsonality.pages.dev');
-    // Body has the banner image
+    // Body serves the seeded creative, not the broken-asset placeholder.
     const html = await res.text();
     expect(html).toContain('<img');
-    expect(html).toContain('example.com/banner.png');
+    expect(html).toContain(PROBE_PNG_DATA_URL);
     expect(html).toContain('/click/live-result-slot');
+    // "AdCP protocol" alone is not proof of a served creative — the badge
+    // stays violet whenever the bucket had any AdCP candidate, including when
+    // every one of them failed to inline. The data: URL above is the proof.
+    expect(html).toContain('AdCP protocol');
   });
 
   test('/preview/<sandbox-auto-approved> serves HTML with image', async () => {
