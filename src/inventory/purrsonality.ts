@@ -2130,16 +2130,23 @@ const handlers = defineSalesPlatform<PurrAccountMeta>({
       const ENCYPHER_VERIFIER_URL = 'https://governance.encypher.seller.example';
 
       // PROVENANCE_REQUIRED gate — scope to the AAO comply-runner's canonical
-      // acme-outdoor test kit (operator `pinnacle-agency.example`). Prior
+      // acme-outdoor test kit (operator `pinnacle-agency.example`, or any
+      // per-specialism subdomain of it: AdCP 3.1.30 namespaced the storyboard
+      // operators, e.g. `sales-non-guaranteed.pinnacle-agency.example`, so an
+      // exact-equality gate silently stops recognising the test kit). Prior
       // AAO runs routinely leave `test-product-disclosure-required` in the
       // process-global `seededProducts` map after the compliance run finishes,
       // and a plain `hasSeededProductRequiringProvenance()` check would then
       // fire for every external buyer (Abzu demo, Jan Preissner ping via
       // LinkedIn 2026-07-04) on unrelated syncs. Operator equality lets the
       // provenance_enforcement storyboard hit its reject_no_provenance
-      // expectation without collateral damage to live buyers.
+      // expectation without collateral damage to live buyers. Matching the
+      // operator suffix keeps that scoping while surviving the namespacing.
       const wireOperator = ((ctx as { input?: { account?: { operator?: string } } }).input?.account?.operator ?? '').toLowerCase();
-      const isAaoTestKit = wireOperator === 'pinnacle-agency.example';
+      const AAO_TEST_KIT_OPERATOR = 'pinnacle-agency.example';
+      const isAaoTestKit =
+        wireOperator === AAO_TEST_KIT_OPERATOR ||
+        wireOperator.endsWith(`.${AAO_TEST_KIT_OPERATOR}`);
       if (!provenance && isAaoTestKit && mockUpstream.hasSeededProductRequiringProvenance()) {
         // Still seed the creative so subsequent force_creative_status calls
         // (e.g. 3.1 dependency_impairment's force_replacement_approved on
